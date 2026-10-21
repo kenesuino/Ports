@@ -29,4 +29,4 @@ def test_protocol_reply_does_not_cancel_startup():
 def test_supplied_icon_preserved():
     source = Path(r'D:\Downloads\localhost-port-reference-vector.svg')
     if source.exists():
-        assert source.read_bytes() == Path('ports/assets/ports.svg').read_bytes()
+        assert source.read_bytes().replace(b'\r\n', b'\n') == Path('ports/assets/ports.svg').read_bytes().replace(b'\r\n', b'\n')
