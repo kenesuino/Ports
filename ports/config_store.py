@@ -1,164 +1,173 @@
-"""Validated, versioned JSON persistence under %APPDATA%/Ports.
-
-Stores port labels, external-port filters, saved sessions, and UI prefs.
-Atomic writes preserve the prior config on failure; malformed config is
-retained for recovery rather than overwritten.
-"""
-
-from __future__ import annotations
-
+"""Versioned config with atomic writes and explicit corrupt-file recovery."""
+from dataclasses import dataclass, field, asdict
 import json
 import os
-import re
+from pathlib import Path
 import shutil
 import tempfile
-from dataclasses import dataclass, field
-from pathlib import Path
+import time
+import uuid
 
-SCHEMA_VERSION = 1
+from .profiles import WorkspaceProfile, identifier, text, ACCENTS
+
+SCHEMA_VERSION = 2
 MAX_SESSIONS = 64
 MAX_LABEL_LEN = 120
-MAX_CMD_LEN = 1024
-MAX_FILTER_ENTRIES = 256
-
-DEFAULT_PROCESS_DENYLIST = [
-    "system", "registry", "smss.exe", "csrss.exe", "wininit.exe",
-    "services.exe", "lsass.exe", "svchost.exe", "winlogon.exe",
-    "dwm.exe", "spoolsv.exe", "searchhost.exe", "sihost.exe",
-    "fontdrvhost.exe", "memory compression",
-]
-
-_SAFE_NAME = re.compile(r"^[\w .\-\[\]\(\)@]+$")
+DEFAULT_PROCESS_DENYLIST = ["system", "registry", "smss.exe", "csrss.exe", "wininit.exe", "services.exe", "lsass.exe", "svchost.exe", "winlogon.exe", "dwm.exe", "spoolsv.exe", "searchhost.exe", "sihost.exe", "fontdrvhost.exe", "memory compression"]
 
 
-def config_dir() -> Path:
-    base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
-    return Path(base) / "Ports"
+def config_dir():
+    return Path(os.environ.get("APPDATA", str(Path.home() / "AppData/Roaming"))) / "Ports"
 
 
-def config_path() -> Path:
+def config_path():
     return config_dir() / "config.json"
 
 
 @dataclass
 class SavedSession:
     name: str
-    shell: str          # pwsh | powershell | cmd | wsl
+    shell: str
     cwd: str
     startup_cmd: str = ""
     distro: str = ""
+    id: str = field(default_factory=identifier)
+    restart_cmd: str = ""
+    workspace_profile_id: str = ""
+    terminal_profile_id: str = ""
+    instance_id: str = ""
+    accent: str = ACCENTS[0]
 
-    def to_dict(self) -> dict:
-        return {
-            "name": self.name, "shell": self.shell, "cwd": self.cwd,
-            "startup_cmd": self.startup_cmd, "distro": self.distro,
-        }
+    def to_dict(self):
+        return asdict(self)
 
     @staticmethod
-    def from_dict(d: dict) -> "SavedSession":
-        shell = str(d.get("shell", "pwsh"))
+    def from_dict(data):
+        if not isinstance(data, dict):
+            raise ValueError("Invalid saved terminal")
+        shell = data.get("shell", "pwsh")
         if shell not in ("pwsh", "powershell", "cmd", "wsl"):
-            shell = "pwsh"
-        return SavedSession(
-            name=str(d.get("name", "Terminal"))[:MAX_LABEL_LEN] or "Terminal",
-            shell=shell,
-            cwd=str(d.get("cwd", ""))[:MAX_CMD_LEN],
-            startup_cmd=str(d.get("startup_cmd", ""))[:MAX_CMD_LEN],
-            distro=str(d.get("distro", ""))[:MAX_LABEL_LEN],
-        )
+            shell = "pwsh"  # legacy config compatibility
+        result = SavedSession(text(data.get("name", "Terminal"), 120), shell, text(data.get("cwd", "")))
+        for key in ("startup_cmd", "restart_cmd", "distro", "workspace_profile_id", "terminal_profile_id", "instance_id", "accent"):
+            if key in data:
+                setattr(result, key, text(data[key]))
+        result.id = identifier(data.get("id"))
+        if result.accent not in ACCENTS:
+            result.accent = ACCENTS[0]
+        return result
 
 
 @dataclass
 class Config:
-    port_labels: dict = field(default_factory=dict)   # "shell:port" -> label
+    port_labels: dict = field(default_factory=dict)
     process_denylist: list = field(default_factory=lambda: list(DEFAULT_PROCESS_DENYLIST))
     process_allowlist: list = field(default_factory=list)
-    saved_sessions: list = field(default_factory=list)  # list[SavedSession]
+    saved_sessions: list = field(default_factory=list)
+    profiles: list = field(default_factory=list)
     scrollback_lines: int = 10000
-    geometry: bytes | None = None
-    splitter: bytes | None = None
+    geometry: str = ""
+    splitter: str = ""
+    view_mode: str = "sidebar"
+    reduced_motion: str = "system"
+    warning: str = ""
+    last_error: str = ""
+    read_only: bool = False
 
-    def label_key(self, scope: str, port: int) -> str:
+    def label_key(self, scope, port):
         return f"{scope}:{port}"
 
-    def get_label(self, scope: str, port: int) -> str:
+    def get_label(self, scope, port):
         return self.port_labels.get(self.label_key(scope, port), "")
 
-    def set_label(self, scope: str, port: int, label: str) -> None:
+    def set_label(self, scope, port, label):
         key = self.label_key(scope, port)
-        label = label.strip()[:MAX_LABEL_LEN]
+        label = label.strip()[:120]
         if label:
             self.port_labels[key] = label
         else:
             self.port_labels.pop(key, None)
 
 
-def _validate_filters(lst, default) -> list:
-    if not isinstance(lst, list):
-        return list(default)
-    out = []
-    for item in lst[:MAX_FILTER_ENTRIES]:
-        s = str(item).strip().lower()
-        if s and _SAFE_NAME.match(s):
-            out.append(s)
-    return out
-
-
-def load() -> Config:
-    """Load config; on any failure return defaults without touching the file."""
+def load():
+    config = Config()
     path = config_path()
-    cfg = Config()
     try:
-        raw = path.read_text(encoding="utf-8")
-        data = json.loads(raw)
-        if not isinstance(data, dict) or data.get("version") != SCHEMA_VERSION:
-            return cfg
+        if not path.exists():
+            return config
+        if path.stat().st_size > 2 * 1024 * 1024:
+            raise ValueError("Config exceeds 2 MiB")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or data.get("version") not in (1, 2):
+            raise ValueError("Unsupported config version")
+        for key in ("process_denylist", "process_allowlist"):
+            values = data.get(key, getattr(config, key))
+            if not isinstance(values, list) or len(values) > 256 or any(not isinstance(v, str) or len(v) > 120 for v in values):
+                raise ValueError(f"Invalid {key}")
+            setattr(config, key, [v.strip().lower() for v in values if v.strip()])
         labels = data.get("port_labels", {})
-        if isinstance(labels, dict):
-            cfg.port_labels = {
-                str(k)[:MAX_CMD_LEN]: str(v)[:MAX_LABEL_LEN]
-                for k, v in list(labels.items())[:1024]
-            }
-        cfg.process_denylist = _validate_filters(
-            data.get("process_denylist"), DEFAULT_PROCESS_DENYLIST)
-        cfg.process_allowlist = _validate_filters(data.get("process_allowlist"), [])
-        sessions = data.get("saved_sessions", [])
-        if isinstance(sessions, list):
-            cfg.saved_sessions = [
-                SavedSession.from_dict(s) for s in sessions[:MAX_SESSIONS]
-                if isinstance(s, dict)
-            ]
-        try:
-            sb = int(data.get("scrollback_lines", 10000))
-            cfg.scrollback_lines = max(100, min(100000, sb))
-        except (TypeError, ValueError):
-            pass
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        pass
-    return cfg
+        if not isinstance(labels, dict) or len(labels) > 4096:
+            raise ValueError("Invalid labels")
+        config.port_labels = {text(k): text(v, 120) for k, v in labels.items()}
+        saved = data.get("saved_sessions", [])
+        if not isinstance(saved, list) or len(saved) > MAX_SESSIONS:
+            raise ValueError("Invalid saved sessions")
+        config.saved_sessions = [SavedSession.from_dict(s) for s in saved if isinstance(s, dict)]
+        profiles = data.get("profiles", [])
+        if not isinstance(profiles, list) or len(profiles) > 128:
+            raise ValueError("Invalid workspace count")
+        config.profiles = [WorkspaceProfile.from_dict(p) for p in profiles]
+        if len({p.id for p in config.profiles}) != len(config.profiles):
+            raise ValueError("Duplicate workspace IDs")
+        lines = data.get("scrollback_lines", 10000)
+        if type(lines) is not int or not 100 <= lines <= 100000:
+            raise ValueError("Invalid scrollback limit")
+        config.scrollback_lines = lines
+        for key in ("geometry", "splitter"):
+            setattr(config, key, text(data.get(key, ""), 65536))
+        config.view_mode = data.get("view_mode", "sidebar")
+        config.reduced_motion = data.get("reduced_motion", "system")
+        if config.view_mode not in ("sidebar", "tabs") or config.reduced_motion not in ("system", "on", "off"):
+            raise ValueError("Invalid navigation/motion setting")
+    except (OSError, ValueError, TypeError, UnicodeError) as exc:
+        config = Config(warning=f"Config retained for recovery: {exc}", read_only=True)
+    return config
 
 
-def save(cfg: Config) -> bool:
-    """Atomically write config. Returns False on failure; prior file preserved."""
-    path = config_path()
-    data = {
-        "version": SCHEMA_VERSION,
-        "port_labels": cfg.port_labels,
-        "process_denylist": cfg.process_denylist,
-        "process_allowlist": cfg.process_allowlist,
-        "saved_sessions": [s.to_dict() for s in cfg.saved_sessions[:MAX_SESSIONS]],
-        "scrollback_lines": cfg.scrollback_lines,
-    }
+def save(config):
+    if config.read_only:
+        config.last_error = "Recovery required; original config retained"
+        return False
+    data = {key: getattr(config, key) for key in ("port_labels", "process_denylist", "process_allowlist", "scrollback_lines", "view_mode", "reduced_motion", "geometry", "splitter")}
+    data.update(version=SCHEMA_VERSION, saved_sessions=[s.to_dict() for s in config.saved_sessions], profiles=[p.to_dict() for p in config.profiles])
+    temporary = None
     try:
+        path = config_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            shutil.move(tmp, path)
-        finally:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
+        descriptor, temporary = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            json.dump(data, output, indent=2)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+        config.last_error = ""
         return True
-    except OSError:
+    except (OSError, ValueError, TypeError) as exc:
+        config.last_error = str(exc)
+        return False
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def recover(config):
+    try:
+        source = config_path()
+        if source.exists():
+            shutil.copy2(source, source.with_suffix(f".recovery-{time.time_ns()}.json"))
+        config.read_only = False
+        config.warning = ""
+        return True
+    except OSError as exc:
+        config.last_error = str(exc)
         return False

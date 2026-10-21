@@ -1,0 +1,239 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="816" height="816" viewBox="0 0 816 816">
+  <defs>
+    <linearGradient id="topMetal" x1="196" y1="139" x2="604" y2="228" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a6b9ce"/>
+      <stop offset=".56" stop-color="#afc0d3"/>
+      <stop offset="1" stop-color="#a5b8cd"/>
+    </linearGradient>
+    <linearGradient id="topRightBevel" x1="594" y1="144" x2="670" y2="220" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a8bed3"/>
+      <stop offset="1" stop-color="#8ca3bc"/>
+    </linearGradient>
+    <linearGradient id="lidSeam" x1="101" y1="222" x2="688" y2="222" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#263448"/>
+      <stop offset=".24" stop-color="#4b5c74"/>
+      <stop offset=".62" stop-color="#586a83"/>
+      <stop offset="1" stop-color="#263548"/>
+    </linearGradient>
+    <linearGradient id="frontBevel" x1="76" y1="312" x2="716" y2="524" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f5faff"/>
+      <stop offset=".48" stop-color="#eef5fb"/>
+      <stop offset=".83" stop-color="#e1ecf5"/>
+      <stop offset="1" stop-color="#bccedf"/>
+    </linearGradient>
+    <linearGradient id="bottomBevel" x1="391" y1="605" x2="391" y2="665" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#cbdbe9"/>
+      <stop offset="1" stop-color="#adc1d6"/>
+    </linearGradient>
+    <linearGradient id="faceMetal" x1="89" y1="261" x2="691" y2="641" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e1ebf4"/>
+      <stop offset=".53" stop-color="#e3edf5"/>
+      <stop offset="1" stop-color="#e4ecf4"/>
+    </linearGradient>
+    <linearGradient id="ventPaint" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#405066"/>
+      <stop offset="1" stop-color="#3d4c5f"/>
+    </linearGradient>
+    <linearGradient id="smallBevel" x1=".16" y1="0" x2=".72" y2="1">
+      <stop stop-color="#b9ccdf"/>
+      <stop offset=".34" stop-color="#c7d8e7"/>
+      <stop offset=".68" stop-color="#ecf4fb"/>
+      <stop offset="1" stop-color="#f8fcff"/>
+    </linearGradient>
+    <linearGradient id="socketBevel" x1="208" y1="284" x2="580" y2="601" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#bbcee0"/>
+      <stop offset=".36" stop-color="#bbccdf"/>
+      <stop offset=".69" stop-color="#dbe7f2"/>
+      <stop offset="1" stop-color="#f4f9fe"/>
+    </linearGradient>
+    <linearGradient id="socketDark" x1="391" y1="267" x2="391" y2="611" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#000b14"/>
+      <stop offset=".62" stop-color="#010d17"/>
+      <stop offset="1" stop-color="#000c16"/>
+    </linearGradient>
+    <radialGradient id="screenPaint" cx=".52" cy=".57" r=".8">
+      <stop stop-color="#101c25"/>
+      <stop offset="1" stop-color="#0d1922"/>
+    </radialGradient>
+    <linearGradient id="wallPaint" x1="392" y1="394" x2="392" y2="599" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1e2a37"/>
+      <stop offset=".53" stop-color="#303d4e"/>
+      <stop offset="1" stop-color="#303d4f"/>
+    </linearGradient>
+    <linearGradient id="floorPaint" x1="392" y1="556" x2="392" y2="603" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#293848"/>
+      <stop offset=".66" stop-color="#526074"/>
+      <stop offset="1" stop-color="#5a677a"/>
+    </linearGradient>
+    <linearGradient id="greenButton" x1="0" y1="0" x2=".85" y2="1">
+      <stop stop-color="#75ff27"/>
+      <stop offset=".46" stop-color="#47e717"/>
+      <stop offset="1" stop-color="#29a80c"/>
+    </linearGradient>
+    <linearGradient id="greenFace" x1="0" y1="0" x2=".65" y2="1">
+      <stop stop-color="#8aff37"/>
+      <stop offset=".35" stop-color="#6bfc2a"/>
+      <stop offset="1" stop-color="#51f31d"/>
+    </linearGradient>
+    <radialGradient id="greenGlint">
+      <stop stop-color="#e8ffd1"/>
+      <stop offset="1" stop-color="#d8ffb2"/>
+    </radialGradient>
+    <linearGradient id="amberButton" x1=".24" y1="0" x2=".77" y2="1">
+      <stop stop-color="#ffd315"/>
+      <stop offset=".43" stop-color="#ffb900"/>
+      <stop offset="1" stop-color="#e98600"/>
+    </linearGradient>
+    <linearGradient id="amberFace" x1="0" y1="0" x2=".57" y2="1">
+      <stop stop-color="#fff065"/>
+      <stop offset=".43" stop-color="#ffe53b"/>
+      <stop offset="1" stop-color="#ffd421"/>
+    </linearGradient>
+    <linearGradient id="pinMetal">
+      <stop stop-color="#fff16a"/>
+      <stop offset=".15" stop-color="#ffda37"/>
+      <stop offset=".34" stop-color="#ffc51b"/>
+      <stop offset=".75" stop-color="#ffbe10"/>
+      <stop offset=".92" stop-color="#ffaa00"/>
+      <stop offset="1" stop-color="#e98a00"/>
+    </linearGradient>
+    <linearGradient id="pin1" href="#pinMetal" x1="211" y1="550" x2="231.5" y2="556.8" gradientUnits="userSpaceOnUse"/>
+    <linearGradient id="pin2" href="#pinMetal" x1="255.5" y1="550" x2="277" y2="554.6" gradientUnits="userSpaceOnUse"/>
+    <linearGradient id="pin3" href="#pinMetal" x1="300" y1="550" x2="321.5" y2="553.1" gradientUnits="userSpaceOnUse"/>
+    <linearGradient id="pin4" href="#pinMetal" x1="343.7" y1="550" x2="365" y2="551.3" gradientUnits="userSpaceOnUse"/>
+    <linearGradient id="pin5" href="#pinMetal" x1="387.5" y1="550" x2="408.5" y2="550" gradientUnits="userSpaceOnUse"/>
+    <linearGradient id="pin6" href="#pinMetal" x1="431" y1="550" x2="452.2" y2="548.7" gradientUnits="userSpaceOnUse"/>
+    <linearGradient id="pin7" href="#pinMetal" x1="473" y1="550" x2="494.3" y2="547.6" gradientUnits="userSpaceOnUse"/>
+    <linearGradient id="pin8" href="#pinMetal" x1="514.8" y1="550" x2="536.5" y2="546.2" gradientUnits="userSpaceOnUse"/>
+    <linearGradient id="pin9" href="#pinMetal" x1="556" y1="550" x2="577" y2="544.3" gradientUnits="userSpaceOnUse"/>
+    <linearGradient id="pinSide" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#a65e00"/>
+      <stop offset=".2" stop-color="#422a12"/>
+      <stop offset="1" stop-color="#30210d"/>
+    </linearGradient>
+    <linearGradient id="contactFront" x1="0" y1="0" x2="1" y2=".7">
+      <stop stop-color="#ffc829"/>
+      <stop offset=".4" stop-color="#efa000"/>
+      <stop offset="1" stop-color="#d88600"/>
+    </linearGradient>
+    <linearGradient id="contactBend" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#fff15b"/>
+      <stop offset=".63" stop-color="#fff681"/>
+      <stop offset="1" stop-color="#ffd631"/>
+    </linearGradient>
+    <g id="contactEnd">
+      <path d="M2 0H17.6L22 5.1V12H0V5.2Z" fill="url(#contactFront)"/>
+      <path d="M2 0H17.6L22 5.1V8.1Q20.7 5.8 17.5 5.8H4Q1.5 5.8 0 9V5.2Z" fill="url(#contactBend)"/>
+    </g>
+  </defs>
+
+  <g id="metal-housing">
+    <path d="M201 132.5H588C602.5 132.5 616 139.5 626.5 151.2L711 244.8C720 255.2 724.4 267 724.4 279.2V609C724.4 643 696 671.2 661.4 671.2H124C89 671.2 61.2 643.7 61.2 609V279.4C61.2 266.1 65.1 253.6 74.2 243.2L170.4 145.8C179.4 137.3 190.1 132.5 201 132.5Z" fill="url(#topMetal)" stroke="#020e1b" stroke-width="16" stroke-linejoin="round"/>
+    <path d="M109.5 217L175 151Q186 141.2 203 141C194 144 188.7 149.1 184 155L141 208.6Q137 214.9 144.2 216.5Z" fill="#dce7f1"/>
+    <path d="M587 141C601 142 611 147 620 157L680.5 220L650 217Q654.6 214.1 650.5 207.5L605 151Q597 143 587 141Z" fill="url(#topRightBevel)"/>
+    <path d="M199 141H588" fill="none" stroke="#c6d6e5" stroke-width="1.1"/>
+
+    <rect x="208.8" y="156.3" width="370.8" height="19" rx="9.5" fill="url(#ventPaint)" stroke="#8092a7" stroke-width=".9"/>
+    <rect x="195.2" y="183.3" width="399.2" height="19" rx="9.5" fill="url(#ventPaint)" stroke="#8195aa" stroke-width="1"/>
+    <path d="M218.3 175.3H570.2M204.8 202.3H584.9" fill="none" stroke="#c0cfdf" stroke-width=".8"/>
+
+    <path d="M120 216.6H666C674.5 216.6 681.5 219 687.1 224.8L696 235C685 229.3 676 227.6 665.5 227.5H121.5C109.6 227.5 99.6 232.6 91.9 238L107.4 221.5C110.1 217.6 114.6 216.6 120 216.6Z" fill="url(#lidSeam)"/>
+    <path d="M114 216.5H665" fill="none" stroke="#c5d3e2" stroke-width="1"/>
+
+    <path d="M124 227.5H663.5C693 227.5 716.5 250.1 716.5 279.2V608.7C716.5 639.1 692.3 663.3 661.4 663.3H124C93.5 663.3 69.2 639 69.2 609V279.4C69.2 250 93.9 227.5 124 227.5Z" fill="url(#frontBevel)"/>
+    <path d="M69.5 601C74 617 84 628 100 634L107 639Q114 644 127 644H660Q686 642 696 614L696 604H716.5V609C715.2 639.7 692.3 663.3 661.4 663.3H124C94.5 662.8 70.1 640 69.5 609Z" fill="url(#bottomBevel)"/>
+    <path d="M123.5 246.7H660.7C682.2 246.7 697.2 262.3 697.2 283.1V604.9C697.2 626.6 681.4 644.2 660.5 644.2H124.9C103.4 644.2 86.2 626.8 86.2 605.5V283.1C86.2 262.2 102.5 246.7 123.5 246.7Z" fill="url(#faceMetal)"/>
+  </g>
+
+  <g id="indicator-sockets">
+    <rect x="114.2" y="261.6" width="124.5" height="91" rx="24" fill="url(#smallBevel)"/>
+    <rect x="122" y="270.2" width="110" height="77" rx="17" fill="#000b14" stroke="#26313d" stroke-width=".8"/>
+    <rect x="545.2" y="261.6" width="123" height="91" rx="24" fill="url(#smallBevel)"/>
+    <rect x="552.7" y="270.2" width="107.5" height="77" rx="17" fill="#000b14" stroke="#26313d" stroke-width=".8"/>
+
+    <path d="M147.4 285.1H205.8Q216.6 285.1 216.6 296.1V322Q216.6 332 206.3 332H147.1Q136.6 332 136.6 321.7V296Q136.6 285.1 147.4 285.1Z" fill="url(#greenButton)" stroke="#153b11" stroke-width="1"/>
+    <path d="M148.2 286.8H193.3C201.4 286.8 205.6 291.4 205.6 299V312.6Q205.6 321.2 197.2 321.2H150.8Q139 321.2 138.4 310V297.1Q138.4 286.8 148.2 286.8Z" fill="url(#greenFace)"/>
+    <ellipse cx="152.9" cy="299.1" rx="8.8" ry="8.7" fill="url(#greenGlint)"/>
+    <path d="M144.7 331.1H208.5" fill="none" stroke="#378d12" stroke-width=".9"/>
+
+    <path d="M579 285.2H634Q645.2 285.2 645.2 296V321.9Q645.2 332 634.6 332H578.8Q567.6 332 567.6 321.8V296Q567.6 285.2 579 285.2Z" fill="url(#amberButton)" stroke="#442d06" stroke-width="1"/>
+    <path d="M582.5 289.6H623.7Q635.2 289.6 635.2 301V312.8Q635.2 321.2 626.1 321.2H583.4Q573.1 321.2 573.1 310.8V300.3Q573.1 289.6 582.5 289.6Z" fill="url(#amberFace)"/>
+    <ellipse cx="583.7" cy="299.1" rx="9.1" ry="8.7" fill="#fffec1"/>
+    <path d="M574.5 330.8H637.3" fill="none" stroke="#f6a500" stroke-width="1"/>
+  </g>
+
+  <g id="connector-opening">
+    <path d="M304 256.5H480.7C491.2 256.5 499.2 265 499.2 275.6V302.9H526.1C536.4 302.9 544 311.4 544 322V358.4H625C637.3 358.4 646 368.6 646 381.4V605.7C646 616.6 637.7 623.9 627.6 623.9H158.2C146.7 623.9 139 616.5 139 605.6V381.9C139 368.6 147.5 358.4 159.3 358.4H240.4V322.5C240.4 311.2 246.2 302.9 255.5 302.9H285.4V275.8C285.4 265.2 293.4 256.5 304 256.5Z" fill="url(#socketBevel)" stroke="#cadbe9" stroke-width=".8"/>
+    <path d="M149.4 608.7Q154.6 614.5 164 614.2H621.7Q632.7 614.2 637 604.5L643.6 607.3Q641.6 621.9 628 623H159.1Q152.3 623 149.2 620.1Z" fill="#f3f9fe"/>
+    <path d="M489.7 274.2L496.6 268.1Q499.3 273 499.3 279.7V302.9L491 312V276.6Z" fill="#eaf3fa"/>
+    <path d="M535.4 322.7L543.8 318.8V358.9L536.1 366.5Z" fill="#eff7fd"/>
+
+    <path d="M303.8 265.9H480.2C486.7 265.9 490.6 270.2 490.6 276.5V307.8Q490.6 313.1 496 313.1H526.4Q534.9 313.1 534.9 321.7V361.6Q534.9 367.6 541 367.6H621.4C630 367.6 635.4 374 635.4 382.2V597.3C635.4 606.1 630.2 612.1 621.2 612.1H163.2C153.7 612.1 148.4 606 148.4 597V382.5C148.4 373.2 153.7 367.6 163.2 367.6H241.7Q249.1 367.6 249.1 361.3V321.6Q249.1 313.1 257.4 313.1H289.3Q294.2 313.1 294.2 308V276.5C294.2 270.5 297.5 265.9 303.8 265.9Z" fill="url(#socketDark)" stroke="#34404b" stroke-width=".9"/>
+
+    <path d="M159.5 394.7L177.9 407.3Q186.5 412.4 186.5 422.2V550.5Q186.5 557.2 191.1 557.2H198.8L160.1 600.7Z" fill="url(#wallPaint)"/>
+    <path d="M177.9 407.3Q186.5 412.4 186.5 422.2V550.5Q186.5 557.2 191.1 557.2H198.8L160.1 600.7V585.3L174.9 564.7Q179.7 557.7 179.7 549.8V420.6Q179.7 413.9 177.9 407.3Z" fill="#1b2837"/>
+    <path d="M624.7 394.7L606.4 407.6Q597.4 413.7 597.4 422.6V550.8Q597.4 557.2 592.5 557.2H587.8L623.6 600.7Z" fill="url(#wallPaint)"/>
+    <path d="M606.4 407.6Q597.4 413.7 597.4 422.6V550.8Q597.4 557.2 592.5 557.2H587.8L623.6 600.7V585.4L609.1 565.3Q604.3 558.1 604.3 549.8V422.3Q604.3 413.2 606.4 407.6Z" fill="#1b2837"/>
+
+    <path d="M159.5 598.5L198.8 556.7H190.8L186.7 584.9Q184.8 589.5 191.2 589.5H594Q600 589.5 598.3 584.7L587.8 556.7H596.1L624.4 598.5Q623.8 602.5 620 602.5H164Q160.2 602.5 159.5 598.5Z" fill="url(#floorPaint)"/>
+    <path d="M164.7 601.9H619.2" fill="none" stroke="#687488" stroke-width=".8"/>
+
+    <path d="M322.5 281H461.3Q468.6 281 468.6 289V317.1C468.6 325.4 473.6 330.5 481.6 330.5H512.8Q519.6 330.5 519.6 339.1V366.6C519.6 376.6 526.5 382.6 535.3 382.6H568.5Q575.6 382.6 575.6 390.4V502.6Q575.6 507.7 570.8 507.7H213.3Q208.7 507.7 208.7 502.7V390.5Q208.7 383 215 383H244.8C257 383 265.1 377.8 265.1 367.1V338.9Q265.1 330.5 272.9 330.5H303.4Q316.1 330.5 316.1 317.8V289Q316.1 281 322.5 281Z" fill="url(#screenPaint)"/>
+  </g>
+
+  <g id="green-face" fill="none" stroke="#5cf529" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M247.5 398L305.7 428.7L247.2 460.4" stroke-width="19.6"/>
+    <path d="M466 440C471.6 420.9 485.2 410 501.2 410C517.8 410 532.4 424.1 539.1 440" stroke-width="19.5"/>
+    <path d="M334.9 467.6H393.3" stroke-width="19.7"/>
+  </g>
+
+  <g id="gold-contacts">
+    <g fill="url(#pinSide)">
+      <path d="M235 520Q244 521 242 529C238 551 231 572 228 589.8H219L220 579C227 557 234 536 235 520Z"/>
+      <path d="M276 520Q285 520 284 529C282 549 278 572 276.6 589.8H268V580Z"/>
+      <path d="M318 520Q327 520 326.4 529L324.1 589.8H315.7V580Z"/>
+      <path d="M361 520Q369 520 368 529L366.1 589.8H359.6V580Z"/>
+      <path d="M401 520Q410 520 410 526V589.8H403V580Z"/>
+      <path d="M442 520Q450 520 451 527L455.8 589.8H448.9V581Z"/>
+      <path d="M484 520Q491 520 493 528L501.3 589.8H494V581Z"/>
+      <path d="M525 520Q531 521 533 528L547 589.8H538V581Z"/>
+      <path d="M562 520Q569 521 571 528L590 589.8H581V581Z"/>
+    </g>
+    <path d="M225 519.5H235Q241 519.5 240 524.5C235.4 544.5 228.8 564.2 221.4 580.8H198.7C205.7 562 214.6 538.6 219.8 525Q221.3 519.7 225 519.5Z" fill="url(#pin1)"/>
+    <path d="M266.7 519.5H277.3Q284 519.5 282.7 525.8C279.8 545.8 275.5 564.3 270.4 581H247.7C253.6 560.9 258.4 541.1 262 525.5Q262.9 519.5 266.7 519.5Z" fill="url(#pin2)"/>
+    <path d="M309.3 519.5H319.5Q326.2 519.5 325 525.7C323.7 544.4 321 562.7 317.7 581H295.1C298.7 561.1 302.2 542.4 304.6 525.3Q304.6 519.5 309.3 519.5Z" fill="url(#pin3)"/>
+    <path d="M350.7 519.5H361Q366.6 519.5 366.4 525.7C366.3 543.4 364.3 565.1 363.1 581H340.9C342.7 561.3 344.9 541.8 345.9 525.3Q345.9 519.5 350.7 519.5Z" fill="url(#pin4)"/>
+    <path d="M391.8 519.5H402Q407.8 519.5 408 525.6L408.9 581H387.1L388 525Q388 519.5 391.8 519.5Z" fill="url(#pin5)"/>
+    <path d="M432.9 519.5H443.5Q449 519.5 449.7 525.6C451 544.2 453.4 563.9 454.1 581H431.7C431 562.7 430.9 541.8 429.7 525.2Q429.1 519.5 432.9 519.5Z" fill="url(#pin6)"/>
+    <path d="M474.6 519.5H484.8Q490 519.5 491.1 525.7C492.6 543.3 495.8 563.2 499 581H476.6C474.4 561.7 471.7 541.9 470 525.1Q469.5 519.5 474.6 519.5Z" fill="url(#pin7)"/>
+    <path d="M513.9 519.5H524.2Q529.9 519.5 531.5 525.8C535.2 546 539.4 563.9 543.1 581H520.8C517.3 562.7 512.8 542.2 509.8 525.4Q508.9 519.5 513.9 519.5Z" fill="url(#pin8)"/>
+    <path d="M553.3 519.5H563Q569.1 519.5 571.2 526.3C576 543.7 582.3 564 587.7 581H565.6C559.7 561 553.6 541.8 548.9 525.1Q547.3 519.5 553.3 519.5Z" fill="url(#pin9)"/>
+
+    <g fill="none" stroke="#ffe564" stroke-width="1.4" stroke-linecap="round" opacity=".85">
+      <path d="M224.5 521.4H233.7"/>
+      <path d="M267.1 521.4H276.3"/>
+      <path d="M309.3 521.4H318.9"/>
+      <path d="M350.5 521.4H360.1"/>
+      <path d="M391.7 521.4H400.9"/>
+      <path d="M433 521.4H442.5"/>
+      <path d="M474.5 521.4H483.8"/>
+      <path d="M514.1 521.4H523.2"/>
+      <path d="M553.4 521.4H562"/>
+    </g>
+
+    <use href="#contactEnd" transform="translate(198.7 577.8) scale(1.03 1)"/>
+    <use href="#contactEnd" transform="translate(247.7 577.8) scale(1.03 1)"/>
+    <use href="#contactEnd" transform="translate(295.1 577.8) scale(1.03 1)"/>
+    <use href="#contactEnd" transform="translate(340.9 577.8) scale(1.01 1)"/>
+    <use href="#contactEnd" transform="translate(387.1 577.8)"/>
+    <use href="#contactEnd" transform="translate(431.7 577.8) scale(1.02 1)"/>
+    <use href="#contactEnd" transform="translate(476.6 577.8) scale(1.02 1)"/>
+    <use href="#contactEnd" transform="translate(520.8 577.8) scale(1.01 1)"/>
+    <use href="#contactEnd" transform="translate(565.6 577.8)"/>
+  </g>
+
+  <g id="activity-marks" fill="#49db18">
+    <path d="M762.3 331.1C765 326.1 769 325.8 772.7 330.1L786.4 338.5C790.2 342.7 788.7 346.2 784.7 348.9L754.1 365C750.3 367.3 745.3 365.2 742.8 361.9C740.1 358.3 741.1 354.7 743.6 351.5Z"/>
+    <path d="M790.4 383.6C796.1 382.4 799.3 386.1 799.3 391V400.4C799.3 406.1 796 409.1 790.7 407.7L756.2 400.8C751.3 399.7 748.4 396.7 748.8 392.6C749.2 388.2 752.6 385.9 757.2 385.1Z"/>
+  </g>
+</svg>

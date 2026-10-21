@@ -51,8 +51,8 @@ def test_kill_already_exited():
     p.kill(); p.wait()
     # owner identity is stale but pid gone -> "already exited" path
     result = kill_windows(owner)
-    assert not result.ok or result.ok  # either message acceptable
-    assert "exit" in result.message or "identity" in result.message
+    assert p.poll() is not None
+    assert result.message in ('process already exited', 'terminated') or 'identity' in result.message
 
 
 def test_describe_target_redacts():

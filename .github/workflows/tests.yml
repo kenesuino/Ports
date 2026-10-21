@@ -18,3 +18,9 @@ jobs:
         # WSL tests skip automatically when no suitable distro exists;
         # skipped WSL coverage is not passing WSL coverage.
         run: python -m pytest tests -q
+      - name: Compile runtime modules
+        run: python -m compileall -q ports
+      - name: Verify packaged assets and dependencies
+        run: |
+          python -m pip check
+          python -c "from pathlib import Path; from ports.icons import ASSETS; assert (ASSETS / 'ports.ico').is_file(); assert (ASSETS / 'ports.svg').is_file()"

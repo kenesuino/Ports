@@ -13,10 +13,11 @@
     return btoa(unescape(encodeURIComponent(str)));
   }
   function b64decode(b64) {
-    return decodeURIComponent(escape(atob(b64)));
+    var text = atob(b64);
+    return Uint8Array.from(text, function (ch) { return ch.charCodeAt(0); });
   }
 
-  var term = new Terminal({
+    var term = new Terminal({
     fontFamily: "'Cascadia Code', 'Cascadia Mono', Consolas, monospace",
     fontSize: 13,
     cursorBlink: true,
@@ -39,6 +40,7 @@
 
   var fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
+  term.options.screenReaderMode = true;
   var searchAddon = new SearchAddon.SearchAddon();
   term.loadAddon(searchAddon);
 
@@ -60,9 +62,10 @@
     if (writing || queue.length === 0) return;
     writing = true;
     var chunk = queue.shift();
-    term.write(b64decode(chunk), function () {
+    var bytes = b64decode(chunk);
+    term.write(bytes, function () {
       writing = false;
-      if (bridge) bridge.written(chunk.length);
+      if (bridge) bridge.written(bytes.length);
       pump();
     });
   }
@@ -75,12 +78,13 @@
     });
     bridge.clearScreen.connect(function () {
       term.clear();
-      term.reset();
     });
     bridge.setScrollback.connect(function (lines) {
       term.options.scrollback = lines;
     });
     bridge.ready();
+    term.focus();
+    requestAnimationFrame(function () { fitAddon.fit(); bridge.resized(term.cols, term.rows); });
   }
 
   term.onData(function (data) {
@@ -102,7 +106,16 @@
       ? searchAddon.findPrevious(needle)
       : searchAddon.findNext(needle);
   };
-  window.portsFit = function () { fitAddon.fit(); };
+  window.portsFit = function () {
+    fitAddon.fit();
+    if (bridge) bridge.resized(term.cols, term.rows);
+  };
+  window.portsBufferText = function () {
+    var lines = [];
+    var buffer = term.buffer.active;
+    for (var i = 0; i < buffer.length; i++) lines.push(buffer.getLine(i).translateToString(true));
+    return lines.join('\n');
+  };
   window.portsFocus = function () { term.focus(); };
 
   new QWebChannel(qt.webChannelTransport, connect);

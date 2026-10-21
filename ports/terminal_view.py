@@ -8,8 +8,7 @@ blocks, which naturally throttles the PTY instead of dropping bytes.
 from __future__ import annotations
 
 import base64
-import threading
-from collections import deque
+import json
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -18,6 +17,7 @@ from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PyQt6.QtWebEngineWidgets import QWebEngineView
+from .stream_buffer import OutputBuffer
 
 WEB_DIR = Path(__file__).parent / "web"
 MAX_INFLIGHT = 1024 * 1024
@@ -115,9 +115,8 @@ class TerminalView(QWebEngineView):
         self.bridge.readyReceived.connect(self._on_ready)
 
         self._scrollback = scrollback
-        self._pending: deque[bytes] = deque()
-        self._inflight = 0
-        self._cond = threading.Condition()
+        self._output_buffer = OutputBuffer()
+        self._closing = False
         self._ready = False
 
         self._drain_timer = QTimer(self)
@@ -131,38 +130,21 @@ class TerminalView(QWebEngineView):
     # -- PTY -> JS (thread-safe entry from reader thread) ------------------
 
     def feed(self, data: bytes) -> None:
-        """Called from the PTY reader thread; blocks under backpressure."""
-        with self._cond:
-            self._pending.append(data)
-            total = sum(len(b) for b in self._pending) + self._inflight
-            while total > MAX_INFLIGHT and not self._closing:
-                self._cond.wait(timeout=0.5)
-                total = sum(len(b) for b in self._pending) + self._inflight
-
-    _closing = False
+        self._output_buffer.put(data)
 
     def _drain(self) -> None:
-        if not self._ready:
-            return
-        with self._cond:
-            if not self._pending or self._inflight > MAX_INFLIGHT:
-                return
-            chunk = bytearray()
-            while self._pending and len(chunk) < CHUNK:
-                chunk.extend(self._pending.popleft())
-            self._inflight += len(chunk)
-            self._cond.notify_all()
-        self.bridge.output.emit(
-            base64.b64encode(bytes(chunk)).decode("ascii"))
+        if self._ready and not self._closing:
+            chunk = self._output_buffer.take(CHUNK)
+            if chunk:
+                self.bridge.output.emit(base64.b64encode(chunk).decode("ascii"))
 
     def _on_written(self, n: int) -> None:
-        with self._cond:
-            self._inflight = max(0, self._inflight - n)
-            self._cond.notify_all()
+        self._output_buffer.ack(n)
 
     def _on_ready(self) -> None:
         self._ready = True
         self.bridge.setScrollback.emit(self._scrollback)
+        self.refit()
 
     # -- actions -------------------------------------------------------------
 
@@ -170,9 +152,8 @@ class TerminalView(QWebEngineView):
         self.bridge.clearScreen.emit()
 
     def search(self, needle: str, backwards: bool = False) -> None:
-        needle_js = needle.replace("\\", "\\\\").replace("'", "\\'")
         self._page.runJavaScript(
-            f"window.portsSearch('{needle_js}', {str(backwards).lower()})")
+            f"window.portsSearch({json.dumps(needle)}, {str(backwards).lower()})")
 
     def refit(self) -> None:
         self._page.runJavaScript("window.portsFit && window.portsFit()")
@@ -188,6 +169,5 @@ class TerminalView(QWebEngineView):
 
     def shutdown(self) -> None:
         self._closing = True
-        with self._cond:
-            self._cond.notify_all()
+        self._output_buffer.close()
         self._drain_timer.stop()

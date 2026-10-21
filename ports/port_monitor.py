@@ -89,10 +89,7 @@ def windows_owner(pid: int) -> OwnerIdentity | None:
 
 def collect_windows_listeners() -> list[Listener]:
     out = []
-    try:
-        conns = psutil.net_connections(kind="tcp")
-    except psutil.Error:
-        return out
+    conns = psutil.net_connections(kind="tcp")
     for c in conns:
         if c.status != psutil.CONN_LISTEN or not c.laddr:
             continue

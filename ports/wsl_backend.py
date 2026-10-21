@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import subprocess
 import threading
+import queue
+import uuid
 from dataclasses import dataclass
 
 from . import wsl_helper
@@ -35,12 +37,17 @@ class WslBackend:
         self._proc: subprocess.Popen | None = None
         self._closed = threading.Event()
         self.last_error = ""
+        self._requests = {}
+        self._write_lock = threading.Lock()
+
+    def _args(self):
+        return ["wsl", "-d", self.distro] if self.distro else ["wsl"]
 
     def available(self) -> tuple[bool, str]:
         """Check python3 + ss exist inside the distro without installing."""
         try:
             out = subprocess.run(
-                ["wsl", "-d", self.distro, "--", "bash", "-lc",
+                [*self._args(), "--", "bash", "-lc",
                  "command -v python3 && command -v ss"],
                 capture_output=True, text=True, timeout=20)
         except (OSError, subprocess.TimeoutExpired) as e:
@@ -61,7 +68,7 @@ class WslBackend:
         wsl_path = "/mnt/" + drive + src[2:].replace("\\", "/")
         try:
             self._proc = subprocess.Popen(
-                ["wsl", "-d", self.distro, "--", "python3", "-u",
+                [*self._args(), "--", "python3", "-u",
                  wsl_path, str(self.shell_pid)],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, text=True, bufsize=1)
@@ -87,6 +94,11 @@ class WslBackend:
             if msg.get("type") == "snapshot":
                 with self._lock:
                     self.latest = msg
+            elif msg.get("type") == "ack":
+                with self._lock:
+                    target = self._requests.get(msg.get("id"))
+                if target:
+                    target.put(msg)
 
     def listeners(self) -> list[WslListener]:
         with self._lock:
@@ -98,15 +110,30 @@ class WslBackend:
             session_owned=bool(l.get("session_owned")))
             for l in raw]
 
-    def send_signal(self, pid: int, sig: int) -> None:
+    def send_signal(self, pid: int, sig: int, *, start=None, address=None, port=None):
         if not self._proc or not self._proc.stdin or self._closed.is_set():
-            return
+            return {"ok": False, "message": "helper unavailable"}
+        # Legacy callers may select a current snapshot owner; identity always
+        # travels to the Linux helper for immediate validation.
+        if start is None:
+            selected = next((item for item in self.listeners() if item.pid == pid), None)
+            if selected:
+                start, address, port = selected.start, selected.address, selected.port
+        request_id = uuid.uuid4().hex
+        result_queue = queue.Queue(maxsize=1)
+        with self._lock:
+            self._requests[request_id] = result_queue
         try:
-            self._proc.stdin.write(
-                json.dumps({"cmd": "signal", "pid": pid, "sig": sig}) + "\n")
-            self._proc.stdin.flush()
-        except (OSError, ValueError):
-            pass
+            with self._write_lock:
+                self._proc.stdin.write(json.dumps({"cmd": "signal", "id": request_id,
+                    "pid": pid, "sig": sig, "start": start, "address": address, "port": port}) + "\n")
+                self._proc.stdin.flush()
+            return result_queue.get(timeout=5)
+        except (OSError, ValueError, queue.Empty) as exc:
+            return {"ok": False, "message": f"Signal not acknowledged: {exc}"}
+        finally:
+            with self._lock:
+                self._requests.pop(request_id, None)
 
     def close(self) -> None:
         self._closed.set()

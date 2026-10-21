@@ -7,6 +7,7 @@ acting. Protected system processes and unknown owners are refused.
 from __future__ import annotations
 
 import re
+import os
 import time
 from dataclasses import dataclass
 
@@ -34,7 +35,7 @@ class KillResult:
 def _identity_matches(proc: psutil.Process, owner: OwnerIdentity) -> bool:
     try:
         return proc.pid == owner.pid and \
-            abs(proc.create_time() - owner.create_time) < 1.0
+            proc.create_time() == owner.create_time
     except psutil.Error:
         return False
 
@@ -57,8 +58,11 @@ def describe_target(owner: OwnerIdentity) -> dict:
     return info
 
 
-def kill_windows(owner: OwnerIdentity, force_after: float = 3.0) -> KillResult:
-    """Revalidate identity, terminate, escalate to kill after timeout."""
+def kill_windows(owner: OwnerIdentity, force_after: float = 3.0, *,
+                 port=None, address=None, protected_pids=()) -> KillResult:
+    """Force terminate only verified identity, optionally current socket owner."""
+    if owner.env != "windows" or owner.pid <= 4 or owner.pid == os.getpid() or owner.pid in protected_pids:
+        return KillResult(False, "refusing protected or invalid process target")
     name = owner.name.lower()
     if name in PROTECTED_NAMES:
         return KillResult(False, f"refusing to kill protected process {name}")
@@ -70,7 +74,20 @@ def kill_windows(owner: OwnerIdentity, force_after: float = 3.0) -> KillResult:
         return KillResult(False, f"cannot access process: {e}")
     if not _identity_matches(proc, owner):
         return KillResult(False, "process identity changed (PID reused); aborted")
+    if proc.name().lower() in PROTECTED_NAMES:
+        return KillResult(False, "refusing protected process")
+    if port is not None:
+        try:
+            current = [c for c in psutil.net_connections(kind="tcp")
+                       if c.status == psutil.CONN_LISTEN and c.laddr and c.pid == owner.pid
+                       and c.laddr.port == port and (address is None or c.laddr.ip == address)]
+        except psutil.Error as exc:
+            return KillResult(False, f"Cannot revalidate socket: {exc}")
+        if not current or not _identity_matches(proc, owner):
+            return KillResult(False, "socket ownership changed; aborted")
     try:
+        if not proc.is_running() or proc.status() == psutil.STATUS_ZOMBIE:
+            return KillResult(False, "process already exited")
         proc.terminate()
     except psutil.NoSuchProcess:
         return KillResult(True, "process already exited")

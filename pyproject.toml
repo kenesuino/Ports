@@ -10,12 +10,14 @@ requires-python = ">=3.11"
 dependencies = [
     "PyQt6==6.11.0",
     "PyQt6-WebEngine==6.11.0",
+    "PyQt6-Qt6==6.11.2",
+    "PyQt6-WebEngine-Qt6==6.11.2",
     "pywinpty==3.1.0",
     "psutil==7.2.2",
 ]
 
 [project.optional-dependencies]
-test = ["pytest==9.0.2"]
+test = ["pytest==9.1.1"]
 
 [project.scripts]
 ports = "ports.__main__:main"
@@ -24,4 +26,4 @@ ports = "ports.__main__:main"
 include = ["ports*"]
 
 [tool.setuptools.package-data]
-ports = ["web/**/*", "shell_integration/**/*"]
+ports = ["web/**/*", "shell_integration/**/*", "assets/*"]

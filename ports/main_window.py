@@ -1,369 +1,560 @@
-"""Main window: layout, port monitor loop, dialogs, wiring."""
+"""Desktop coordinator: profiles, persistent views and asynchronous controls."""
+from copy import deepcopy
+import base64
+import time
+import uuid
 
-from __future__ import annotations
-
-from PyQt6.QtCore import QTimer
-from PyQt6.QtGui import QCloseEvent
-from PyQt6.QtWidgets import (
-    QDialog, QDialogButtonBox, QHBoxLayout, QInputDialog, QLabel, QMainWindow,
-    QMessageBox, QSplitter, QStackedWidget, QVBoxLayout, QWidget,
-)
+from PyQt6.QtCore import QByteArray, QTimer, Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import QDesktopServices, QKeySequence, QShortcut
+from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
+                            QDialogButtonBox, QFormLayout, QInputDialog, QLabel,
+                            QMainWindow, QMessageBox, QPlainTextEdit, QSplitter,
+                            QStackedWidget, QVBoxLayout, QWidget)
 
 from . import config_store
+from .background import BackgroundWork, collect_snapshot
 from .header_bar import HeaderBar
 from .http_probe import ProbePool
-from .port_monitor import (
-    Listener, OwnerIdentity, collect_windows_listeners, filter_noise,
-    map_ports, merge_wsl_forwarders,
-)
-from .process_control import (
-    current_owner_of_port, describe_target, kill_windows,
-)
-from .pty_session import SHELLS
-from .session_manager import SessionManager, TerminalSession
-from .sidebar import Sidebar
-from .theme import COLOR_HTTP_FAIL, COLOR_HTTP_OK, COLOR_UNCHECKED
-
-
-class KillConfirmDialog(QDialog):
-    """Destructive-action gate: shows identity before any kill."""
-
-    def __init__(self, listener: Listener, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Confirm kill")
-        layout = QVBoxLayout(self)
-        owner = listener.owner
-        if owner and owner.env == "windows":
-            info = describe_target(owner)
-            name, pid = info["name"], info["pid"]
-            cmdline = info["cmdline"]
-        elif owner:
-            name, pid = owner.name, owner.pid
-            cmdline = ""
-        else:
-            name, pid, cmdline = "unknown", "?", ""
-        env = f"wsl:{owner.distro}" if owner and owner.env == "wsl" \
-            else "windows"
-        text = QLabel(
-            f"Kill process holding port <b>:{listener.port}</b>?<br><br>"
-            f"<b>PID:</b> {pid}<br><b>Name:</b> {name}<br>"
-            f"<b>Env:</b> {env}<br>"
-            + (f"<b>Command:</b> {cmdline}<br>" if cmdline else "")
-            + "<br>Parent shell stays alive. Watchers may restart the "
-              "listener.")
-        text.setWordWrap(True)
-        layout.addWidget(text)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Kill")
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setObjectName(
-            "danger")
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+from .icons import app_icon
+from .motion import HoverButton, reduced_motion
+from .port_monitor import filter_noise
+from .process_control import kill_windows, redact_cmdline
+from .profile_dialog import ProfileDialog
+from .profiles import TerminalProfile, WorkspaceProfile
+from .session_manager import SessionManager
+from .session_tabs import SessionTabs
+from .sidebar import Sidebar, button
 
 
 class MainWindow(QMainWindow):
+    probeResult = pyqtSignal(str, object)
+
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Ports")
+        self.setWindowTitle("Ports · Local development")
+        self.setWindowIcon(app_icon())
         self.resize(1280, 800)
-
         self.config = config_store.load()
         self.manager = SessionManager(self)
-        self._probe_pool = ProbePool(self._on_probe_result)
-        self._probe_enabled: set[tuple[str, int]] = set()
-        self._probe_last: dict[tuple[str, int], float] = {}
-        self._health: dict[tuple[str, int], str] = {}
-
-        splitter = QSplitter()
+        self.work = BackgroundWork(self)
+        self.work.completed.connect(self._completed)
+        self._cleanup_callback = None
+        self._polling = False
+        self._closing = False
+        self._approved_close = False
+        self._all_listeners = []
+        self._external = []
+        self._probe_enabled = set()
+        self._probe_last, self._health = {}, {}
+        self.probeResult.connect(self._probe_result)
+        self.probes = ProbePool(lambda key, result: self.probeResult.emit(key, result))
+        self.splitter = QSplitter()
         self.sidebar = Sidebar()
-        splitter.addWidget(self.sidebar)
-
+        self.sidebar.probe_enabled = self._probe_enabled
+        self.splitter.addWidget(self.sidebar)
         right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
+        layout = QVBoxLayout(right)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         self.header = HeaderBar()
-        right_layout.addWidget(self.header)
+        self.tabs = SessionTabs()
         self.stack = QStackedWidget()
-        right_layout.addWidget(self.stack, 1)
-        splitter.addWidget(right)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([300, 980])
-        self.setCentralWidget(splitter)
-
+        empty = QWidget()
+        empty_layout = QVBoxLayout(empty)
+        empty_layout.addStretch()
+        headline = QLabel("A home for your local servers")
+        headline.setObjectName("emptyTitle")
+        headline.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addWidget(headline)
+        caption = QLabel("Save a workspace. Launch your terminals. Know which process owns every port.")
+        caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        caption.setWordWrap(True)
+        caption.setObjectName("muted")
+        empty_layout.addWidget(caption)
+        create = button("Create workspace profile", "workspace", lambda: self.profile_action("new", ""))
+        empty_layout.addWidget(create, alignment=Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addStretch()
+        self.stack.addWidget(empty)
+        layout.addWidget(self.header)
+        layout.addWidget(self.tabs)
+        layout.addWidget(self.stack, 1)
+        self.splitter.addWidget(right)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([300, 980])
+        self.setCentralWidget(self.splitter)
+        self.statusBar().showMessage("Local-only · explicit commands · protected process controls")
         self._wire()
-        self.header.set_session(None)
-
-        self._monitor = QTimer(self)
-        self._monitor.setInterval(1500)
-        self._monitor.timeout.connect(self._poll_ports)
-        self._monitor.start()
-
-        self._offer_restore()
-
-    # -- wiring ---------------------------------------------------------
+        self.sidebar.set_profiles(self.config.profiles)
+        self.header.mode.setCurrentIndex(1 if self.config.view_mode == "tabs" else 0)
+        self.set_mode(self.config.view_mode)
+        self._motion()
+        for attr, function in [("geometry", self.restoreGeometry), ("splitter", self.splitter.restoreState)]:
+            value = getattr(self.config, attr, None)
+            if value:
+                try:
+                    raw = base64.b64decode(value) if isinstance(value, str) else value
+                    function(QByteArray(raw))
+                except (ValueError, TypeError):
+                    pass
+        self.timer = QTimer(self)
+        self.timer.setInterval(1500)
+        self.timer.timeout.connect(self.poll)
+        self.timer.start()
+        QTimer.singleShot(0, self._startup)
 
     def _wire(self):
-        sb = self.sidebar
-        sb.newSessionRequested.connect(self._create_session)
-        sb.sessionSelected.connect(self.manager.set_active)
-        sb.sessionCloseRequested.connect(self._close_session)
-        sb.findPort.connect(self._find_port)
-        sb.openUrl.connect(self._open_port)
-        sb.killRequested.connect(self._kill_listener)
-        sb.labelEditRequested.connect(self._edit_label)
-        sb.probeToggled.connect(self._toggle_probe)
+        sidebar = self.sidebar
+        sidebar.newSessionRequested.connect(lambda v: self.manager.create(**v))
+        sidebar.sessionSelected.connect(self.manager.set_active)
+        sidebar.sessionCloseRequested.connect(self.close_session)
+        sidebar.renameRequested.connect(self.rename)
+        sidebar.retryRequested.connect(self.retry)
+        sidebar.moveRequested.connect(self.move)
+        sidebar.profileAction.connect(self.profile_action)
+        sidebar.settingsRequested.connect(self.settings)
+        sidebar.findPort.connect(self.find_port)
+        sidebar.openUrl.connect(self.open_port)
+        sidebar.copyUrl.connect(self.copy_port)
+        sidebar.killRequested.connect(self.kill_listener)
+        sidebar.labelEditRequested.connect(self.edit_label)
+        sidebar.probeToggled.connect(self.toggle_probe)
+        self.manager.sessionAdded.connect(self.added)
+        self.manager.sessionRemoved.connect(self.removed)
+        self.manager.activeChanged.connect(self.active_changed)
+        self.manager.orderChanged.connect(self.refresh_navigation)
+        self.tabs.selected.connect(lambda sid: self.manager.set_active(self.session(sid)))
+        self.tabs.closeRequested.connect(lambda sid: self.close_session(self.session(sid)))
+        self.tabs.renameRequested.connect(self.rename)
+        self.tabs.orderRequested.connect(self.manager.reorder)
+        self.header.modeChanged.connect(self.set_mode)
+        self.header.restartRequested.connect(self.restart)
+        self.header.ctrlCRequested.connect(lambda: self.manager.active and self.manager.active.send_ctrl_c())
+        self.header.clearRequested.connect(lambda: self.manager.active and self.manager.active.clear())
+        self.header.killPortRequested.connect(self.kill_active)
+        self.header.searchRequested.connect(lambda text: self.manager.active and self.manager.active.view.search(text))
+        for sequence, callback in [("Ctrl+Shift+T", sidebar.new_terminal), ("Ctrl+Shift+F", self.header.search_edit.setFocus),
+                                    ("Ctrl+W", lambda: self.close_session(self.manager.active)),
+                                    ("Ctrl+Tab", lambda: self.cycle(1)), ("Ctrl+Shift+Tab", lambda: self.cycle(-1))]:
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.activated.connect(callback)
 
-        self.manager.sessionAdded.connect(self._on_session_added)
-        self.manager.sessionRemoved.connect(self._on_session_removed)
-        self.manager.activeChanged.connect(self._on_active_changed)
-
-        self.header.restartRequested.connect(
-            lambda: self.manager.active and self.manager.active.restart())
-        self.header.ctrlCRequested.connect(
-            lambda: self.manager.active and self.manager.active.send_ctrl_c())
-        self.header.killPortRequested.connect(self._kill_active_port)
-        self.header.clearRequested.connect(
-            lambda: self.manager.active and self.manager.active.clear())
-        self.header.searchRequested.connect(self._search_terminal)
-
-    # -- sessions ---------------------------------------------------------
-
-    def _create_session(self, values: dict):
-        import os
-        cwd = values["cwd"]
-        if cwd and not os.path.isdir(cwd):
-            QMessageBox.warning(self, "Ports", f"Folder not found:\n{cwd}")
+    def _completed(self, callback, value, error):
+        if self._closing:
+            if callback == self._cleanup_callback:
+                self._finish_close(value)
             return
-        self.manager.create(values["shell"], cwd, values["name"],
-                            values["startup_cmd"], values["distro"],
-                            self.config.scrollback_lines)
+        if callback:
+            callback(error if error else value)
 
-    def _on_session_added(self, session: TerminalSession):
-        session.start(self.config.scrollback_lines)
+    def _startup(self):
+        if getattr(self.config, "warning", ""):
+            QMessageBox.warning(self, "Configuration recovery", self.config.warning + "\nOriginal file retained; use Preferences to recover before saving.")
+        if self.config.saved_sessions and QMessageBox.question(self, "Restore layout", "Restore previous terminal layout? Fresh shells only; saved startup commands will not run.") == QMessageBox.StandardButton.Yes:
+            for saved in self.config.saved_sessions:
+                session = self.manager.create(saved.shell, saved.cwd, saved.name, "", saved.distro,
+                                              definition_id=saved.id, profile_id=saved.workspace_profile_id,
+                                              instance_id=saved.instance_id, accent=saved.accent)
+                # Restore definitions after shell startup has been configured,
+                # without arming the automatic startup path.
+                session.startup_cmd = saved.startup_cmd
+                session.restart_cmd = saved.restart_cmd or saved.startup_cmd
+
+    def save_config(self):
+        if not config_store.save(self.config):
+            self.statusBar().showMessage("Settings not saved: " + getattr(self.config, "last_error", "configuration is read-only"))
+            return False
+        return True
+
+    def _motion(self):
+        setting = getattr(self.config, "reduced_motion", "system")
+        disabled = reduced_motion(setting)
+        self.sidebar.motion_disabled = disabled
+        for control in self.findChildren(HoverButton):
+            control.motion_disabled = disabled
+
+    def session(self, sid):
+        return next((s for s in self.manager.sessions if s.id == sid), None)
+
+    def added(self, session):
+        session.changed.connect(lambda s=session: self.refresh_session(s))
+        session.start(self.config.scrollback_lines, asynchronous=True)
         self.stack.addWidget(session.view)
         self.sidebar.add_session(session)
-        session.changed.connect(
-            lambda s=session: self._refresh_session(s))
+        self._motion()
+        self.refresh_navigation()
 
-    def _on_session_removed(self, session_id: str):
-        # view already removed in _close_session
-        pass
+    def removed(self, sid):
+        self.sidebar.remove_session(sid)
+        self.refresh_navigation()
 
-    def _close_session(self, session: TerminalSession):
-        infos = session.descendant_infos()
-        if infos:
-            names = ", ".join(sorted({i['name'] for i in infos})[:4])
-            ans = QMessageBox.question(
-                self, "Ports",
-                f"Close '{session.name}'? Running processes will be killed:"
-                f"\n{names}")
-            if ans != QMessageBox.StandardButton.Yes:
-                return
-        self.stack.removeWidget(session.view)
-        self.sidebar.remove_session(session.id)
-        self.manager.close(session)
-
-    def _on_active_changed(self, session):
+    def active_changed(self, session):
         self.sidebar.set_active(session)
         self.header.set_session(session)
         if session and session.view:
             self.stack.setCurrentWidget(session.view)
             session.view.refit()
             session.view.focus_terminal()
+        else:
+            self.stack.setCurrentIndex(0)
+        self.tabs.sync(self.manager.sessions, session)
 
-    def _refresh_session(self, session):
+    def refresh_session(self, session):
+        if session not in self.manager.sessions:
+            return
+        labels = {l.port: self.config.get_label(session.label_scope, l.port) for l in session.listeners}
+        self.sidebar.update_card(session, session.listeners, labels, self._health)
         if session is self.manager.active:
             self.header.set_session(session)
+        self.tabs.sync(self.manager.sessions, self.manager.active)
+        counts = {state: sum(s.state == state for s in self.manager.sessions) for state in ("starting", "ready", "running", "failed")}
+        self.sidebar.status.setText(" · ".join(f"{n} {state}" for state, n in counts.items() if n) or "No active terminals")
 
-    # -- port monitoring ---------------------------------------------------
+    def refresh_navigation(self):
+        self.sidebar.sync_order(self.manager.sessions)
+        self.tabs.sync(self.manager.sessions, self.manager.active)
 
-    def _poll_ports(self):
-        windows = collect_windows_listeners()
-        session_members = {}
-        session_roots = {}
-        wsl_ports: dict[str, list[Listener]] = {}
-        for s in self.manager.sessions:
-            if not s.pty or not s.pty.pid:
-                continue
-            if s.shell == "wsl":
-                if s.wsl:
-                    lst = [
-                        Listener(l.address, l.port,
-                                 OwnerIdentity("wsl", l.pid or 0, l.start,
-                                               l.name, s.distro),
-                                 env="wsl", distro=s.distro)
-                        for l in s.wsl.listeners() if l.session_owned
-                    ]
-                    wsl_ports[s.id] = lst
+    def set_mode(self, mode):
+        self.config.view_mode = mode
+        self.sidebar.scroll.setVisible(mode == "sidebar")
+        self.tabs.setVisible(mode == "tabs")
+        self.save_config()
+
+    def rename(self, sid):
+        session = self.session(sid)
+        if not session:
+            return
+        name, accepted = QInputDialog.getText(self, "Rename terminal", "Name", text=session.name)
+        if accepted and name.strip():
+            session.name = name.strip()[:120]
+            self.refresh_session(session)
+
+    def move(self, sid, offset):
+        identifiers = [s.id for s in self.manager.sessions]
+        index = identifiers.index(sid)
+        target = index + offset
+        if 0 <= target < len(identifiers):
+            identifiers[index], identifiers[target] = identifiers[target], identifiers[index]
+            self.manager.reorder(identifiers)
+
+    def cycle(self, offset):
+        if self.manager.sessions:
+            index = self.manager.sessions.index(self.manager.active) if self.manager.active in self.manager.sessions else 0
+            self.manager.set_active(self.manager.sessions[(index + offset) % len(self.manager.sessions)])
+
+    def retry(self, sid):
+        session = self.session(sid)
+        if session and session.state in ("failed", "exited"):
+            self.statusBar().showMessage("Closing failed launch before retry…")
+            session.prepare_close()
+            self.work.submit(session.close, lambda _: self._retry_closed(session))
+
+    def _retry_closed(self, session):
+        from .session_manager import TerminalSession
+        replacement = self.manager.create(session.shell, session.cwd, session.name, session.startup_cmd,
+                                          session.distro, definition_id=session.definition_id,
+                                          profile_id=session.profile_id, instance_id=session.instance_id,
+                                          accent=session.accent, restart_cmd=session.restart_cmd)
+        if session.view:
+            self.stack.removeWidget(session.view)
+            session.view.deleteLater()
+        self.manager.close(session)
+        self.manager.set_active(replacement)
+
+    def profile_action(self, action, identifier):
+        profile = next((p for p in self.config.profiles if p.id == identifier), None)
+        if action in ("run", "copy", "missing"):
+            if not profile:
+                self.statusBar().showMessage("Select or create a workspace profile first")
+                return
+            if action == "run" and any(s.profile_id == profile.id for s in self.manager.sessions):
+                self.manager.launch_profile(profile)
+                self.statusBar().showMessage("Focused existing workspace. Use Restore missing terminals or Launch another copy explicitly.")
+                return
+            if action == "copy" and QMessageBox.question(self, "Launch another copy", "Another copy may conflict with running ports. Launch it?") != QMessageBox.StandardButton.Yes:
+                return
+            if profile.needs_review():
+                commands = "\n\n".join(f"{t.name}\nShell: {t.shell} {t.distro}\nFolder: {t.cwd or '(home)'}\nStartup: {redact_cmdline(t.startup_cmd) or '(none)'}\nRestart: {redact_cmdline(t.restart_cmd) or '(startup command)'}" for t in profile.terminals)
+                dialog = QDialog(self)
+                dialog.setWindowTitle("Review workspace commands")
+                dialog.resize(700, 440)
+                layout = QVBoxLayout(dialog)
+                text = QPlainTextEdit(commands)
+                text.setReadOnly(True)
+                layout.addWidget(text)
+                controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+                controls.button(QDialogButtonBox.StandardButton.Ok).setText("Approve and run")
+                controls.accepted.connect(dialog.accept); controls.rejected.connect(dialog.reject)
+                layout.addWidget(controls)
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return
+                profile.approve()
+                self.save_config()
+            self.manager.launch_profile(profile, duplicate=action == "copy", missing=action == "missing")
+            return
+        if action == "delete" and profile:
+            if QMessageBox.question(self, "Delete profile", f"Delete '{profile.name}'? Running terminals stay open.") == QMessageBox.StandardButton.Yes:
+                self.config.profiles.remove(profile)
+                self.save_config(); self.sidebar.set_profiles(self.config.profiles)
+            return
+        if action == "save":
+            sessions = [s for s in self.manager.sessions if not self.manager.active or not self.manager.active.instance_id or s.instance_id == self.manager.active.instance_id]
+            if not sessions:
+                self.statusBar().showMessage("Open a terminal before saving a workspace"); return
+            profile = WorkspaceProfile(name="Saved workspace", terminals=[TerminalProfile(name=s.name, shell=s.shell, cwd=s.current_cwd or s.cwd,
+                distro=s.distro, startup_cmd=s.startup_cmd, restart_cmd=s.restart_cmd, accent=s.accent, expected_ports=s.expected_ports) for s in sessions])
+        elif action == "duplicate" and profile:
+            profile = WorkspaceProfile.from_dict(profile.to_dict())
+            profile.id = uuid.uuid4().hex
+            profile.name += " copy"
+            profile.reviewed_fingerprint = ""
+            for terminal in profile.terminals:
+                terminal.id = uuid.uuid4().hex
+        elif action == "new":
+            profile = None
+        elif action != "edit" or not profile:
+            return
+        original_id = identifier if action == "edit" else None
+        dialog = ProfileDialog(profile, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            edited = dialog.profile
+            if original_id:
+                index = next(i for i, p in enumerate(self.config.profiles) if p.id == original_id)
+                edited.revision += 1
+                self.config.profiles[index] = edited
             else:
-                session_members[s.id] = s.pty.descendant_pids()
-                session_roots[s.id] = s.pty.pid
+                self.config.profiles.append(edited)
+            self.save_config()
+            self.sidebar.set_profiles(self.config.profiles)
+            self.sidebar.profile_combo.setCurrentIndex(self.sidebar.profile_combo.findData(edited.id))
 
-        windows = merge_wsl_forwarders(windows, wsl_ports)
-        attributed, external = map_ports(session_members, windows,
-                                         session_roots)
-        for sid, lst in wsl_ports.items():
-            attributed.setdefault(sid, []).extend(lst)
-
-        labels = {}
-        for s in self.manager.sessions:
-            lst = attributed.get(s.id, [])
-            self.sidebar.set_listeners(s.id, lst)
-            for l in lst:
-                lbl = self.config.get_label(s.id, l.port)
-                if lbl:
-                    labels[(s.id, l.port)] = lbl
-            self.sidebar.update_card(s, lst, labels)
-            if s is self.manager.active:
-                self.header.set_child(s.active_child_name())
-                self.header.kill_btn.setEnabled(bool(lst))
-
-        kept = [l for l in external
-                if filter_noise(l, self.config.process_denylist,
-                                self.config.process_allowlist)]
-        self.sidebar.update_external(kept)
-        self._run_due_probes(attributed)
-
-    # -- find / open / kill ---------------------------------------------
-
-    def _open_port(self, session_id: str, port: int):
-        import webbrowser
-        webbrowser.open(f"http://localhost:{port}")
-
-    def _find_port(self, port: int):
-        owner = current_owner_of_port(port)
-        if not owner:
-            QMessageBox.information(self, "Ports",
-                                    f"No localhost listener on :{port}")
+    def poll(self):
+        if self._polling or self._closing:
             return
-        lst = Listener("127.0.0.1", port, owner)
-        self._kill_listener(lst)
+        self._polling = True
+        sessions = tuple(self.manager.sessions)
+        self.work.submit(lambda: collect_snapshot(sessions), self._snapshot, self._snapshot_error)
 
-    def _kill_listener(self, listener: Listener):
-        dlg = KillConfirmDialog(listener, self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+    def _snapshot_error(self, error):
+        self._polling = False
+        self.statusBar().showMessage(f"Port data stale: {error}")
+
+    def _snapshot(self, result):
+        self._polling = False
+        attributed, external, children, errors = result
+        self._external = external
+        self._all_listeners = list(external)
+        for session in self.manager.sessions:
+            session.listeners = attributed.get(session.id, [])
+            session.children = children.get(session.id, [])
+            session.child_name = session.children[-1]["name"] if session.children else ""
+            self.sidebar.set_listeners(session.id, session.listeners)
+            self._all_listeners.extend(session.listeners)
+            self.refresh_session(session)
+        self.sidebar.update_external([l for l in external if filter_noise(l, self.config.process_denylist, self.config.process_allowlist)])
+        if errors:
+            self.statusBar().showMessage("Attribution warning: " + errors[0])
+        self.run_probes()
+
+    def url(self, sid, port):
+        session = self.session(sid)
+        listeners = session.listeners if session else self._all_listeners
+        endpoint = next((l for l in listeners if l.port == port), None)
+        host = "[::1]" if endpoint and ":" in endpoint.address else "localhost"
+        return f"http://{host}:{port}"
+
+    def open_port(self, sid, port):
+        QDesktopServices.openUrl(QUrl(self.url(sid, port)))
+
+    def copy_port(self, sid, port):
+        QApplication.clipboard().setText(self.url(sid, port))
+        self.statusBar().showMessage(f"Copied URL for :{port}", 2500)
+
+    def find_port(self, port):
+        # Refresh all environments, bypassing presentation filters.
+        self.work.submit(lambda: collect_snapshot(tuple(self.manager.sessions)), lambda result: self._show_port(port, result), self._snapshot_error)
+
+    def _show_port(self, port, result):
+        attributed, external, _, _ = result
+        listeners = [l for l in external + [l for group in attributed.values() for l in group] if l.port == port]
+        if not listeners:
+            QMessageBox.information(self, "Port search", f"No accessible localhost listener on :{port}")
             return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Owners of :{port}")
+        layout = QVBoxLayout(dialog)
+        for listener in listeners:
+            owner = listener.owner
+            label = QLabel(f"{listener.env} {listener.distro} · {listener.address}:{port} · {owner.name if owner else 'unknown'} · PID {owner.pid if owner else '?'}")
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            layout.addWidget(label)
+            layout.addWidget(button("Force kill this listener owner", "stop", lambda l=listener: self.kill_listener(l)))
+        controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        controls.rejected.connect(dialog.reject)
+        layout.addWidget(controls)
+        dialog.exec()
+
+    def kill_listener(self, listener):
         owner = listener.owner
         if not owner:
-            QMessageBox.warning(self, "Ports", "Owner unknown; cannot kill.")
+            QMessageBox.warning(self, "Cannot kill", "Owner inaccessible; no process action available")
+            return
+        session_roots = {s.pty.pid for s in self.manager.sessions if s.pty}
+        # The ConPTY root is a barrier bootstrap; its interactive shell is
+        # protected too, even if that shell itself owns a listening socket.
+        for s in self.manager.sessions:
+            session_roots.update(p["pid"] for p in s.children if p.get("name", "").lower() in ("powershell.exe", "pwsh.exe", "cmd.exe"))
+        protected = session_roots
+        text = f"Force termination affects every listener owned by this process.\n\nEnvironment: {owner.env} {owner.distro}\nPID: {owner.pid}\nProcess: {owner.name}\nEndpoint: {listener.address}:{listener.port}\nStart identity: {owner.create_time}\n\nParent shell is protected. A watcher may restart this process."
+        question = QMessageBox(self)
+        question.setWindowTitle("Confirm process termination")
+        question.setTextFormat(Qt.TextFormat.PlainText)
+        question.setText(text)
+        question.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        question.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if question.exec() != QMessageBox.StandardButton.Yes:
             return
         if owner.env == "wsl":
-            session = next((s for s in self.manager.sessions
-                            if s.shell == "wsl" and s.distro == owner.distro),
-                           None)
-            if not session or not session.wsl:
-                QMessageBox.warning(self, "Ports",
-                                    "WSL helper not running for this distro.")
+            session = next((s for s in self.manager.sessions if s.distro == owner.distro and s.wsl), None)
+            if not session:
                 return
-            session.wsl.send_signal(owner.pid, 15)
-            return
-        result = kill_windows(owner)
-        if not result.ok:
-            QMessageBox.warning(self, "Ports", result.message)
+            def signal_work():
+                return session.wsl.send_signal(owner.pid, 15, start=owner.create_time,
+                                               address=listener.address, port=listener.port)
+            self.work.submit(signal_work, lambda value: self.statusBar().showMessage(str(value)), lambda error: QMessageBox.warning(self, "Signal refused", error))
+        else:
+            def kill_work():
+                return kill_windows(owner, port=listener.port, address=listener.address, protected_pids=protected)
+            self.work.submit(kill_work, lambda result: self.statusBar().showMessage(result.message), lambda error: QMessageBox.warning(self, "Kill failed", error))
 
-    def _kill_active_port(self):
-        s = self.manager.active
-        if not s:
+    def kill_active(self):
+        session = self.manager.active
+        if not session or not session.listeners:
             return
-        listeners = self.sidebar._listeners_for(s.id)
-        if not listeners:
+        listeners = session.listeners
+        items = [f"{l.address}:{l.port} · {l.owner.name if l.owner else 'unknown'}" for l in listeners]
+        choice, accepted = QInputDialog.getItem(self, "Choose listener", "Process to terminate", items, 0, False)
+        if accepted:
+            self.kill_listener(listeners[items.index(choice)])
+
+    def restart(self):
+        session = self.manager.active
+        if not session:
             return
-        if len(listeners) == 1:
-            self._kill_listener(listeners[0])
+        if session.shell == "cmd":
+            session.send_ctrl_c()
+            if QMessageBox.question(self, "Confirm CMD prompt", "Has the foreground command stopped and CMD returned to its prompt? Run the saved restart command now?") == QMessageBox.StandardButton.Yes:
+                session.restart(confirmed=True)
+        else:
+            session.restart()
+
+    def edit_label(self, sid, port):
+        session = self.session(sid)
+        if not session:
             return
-        items = [f":{l.port} ({l.owner.name if l.owner else '?'})"
-                 for l in listeners]
-        choice, ok = QInputDialog.getItem(
-            self, "Ports", "Kill which port process?", items, 0, False)
+        label, ok = QInputDialog.getText(self, "Port label", f"Label for :{port}", text=self.config.get_label(session.label_scope, port))
         if ok:
-            self._kill_listener(listeners[items.index(choice)])
+            self.config.set_label(session.label_scope, port, label)
+            self.save_config(); self.refresh_session(session)
 
-    # -- labels / probes ------------------------------------------------
-
-    def _edit_label(self, session_id: str, port: int):
-        current = self.config.get_label(session_id, port)
-        text, ok = QInputDialog.getText(
-            self, "Ports", f"Label for :{port} (empty clears):", text=current)
-        if ok:
-            self.config.set_label(session_id, port, text)
-            config_store.save(self.config)
-
-    def _toggle_probe(self, session_id: str, port: int, on: bool):
-        key = (session_id, port)
-        if on:
+    def toggle_probe(self, sid, port, enabled):
+        key = sid, port
+        if enabled:
             self._probe_enabled.add(key)
         else:
             self._probe_enabled.discard(key)
             self._health.pop(key, None)
+        self.run_probes()
 
-    def _run_due_probes(self, attributed):
-        import time
-        now = time.time()
-        for (sid, port) in list(self._probe_enabled):
-            if port not in [l.port for l in attributed.get(sid, [])]:
+    def run_probes(self):
+        for sid, port in tuple(self._probe_enabled):
+            session = self.session(sid)
+            if not session or not any(l.port == port for l in session.listeners):
                 continue
-            if now - self._probe_last.get((sid, port), 0) < 5.0:
-                continue
-            self._probe_last[(sid, port)] = now
-            self._probe_pool.request(f"{sid}:{port}", port)
+            if time.monotonic() - self._probe_last.get((sid, port), 0) >= 5:
+                self._probe_last[(sid, port)] = time.monotonic()
+                endpoint = next(l for l in session.listeners if l.port == port)
+                self.probes.request(f"{sid}:{port}", port, host="::1" if ":" in endpoint.address else "127.0.0.1")
 
-    def _on_probe_result(self, key: str, result):
-        sid, port_s = key.rsplit(":", 1)
-        color = COLOR_HTTP_OK if result.state == "responding" \
-            else COLOR_HTTP_FAIL if result.state in ("refused",) \
-            else COLOR_UNCHECKED
-        self._health[(sid, int(port_s))] = result.label
-        # color applied on next monitor pass via tooltip/health map
-        card = self.sidebar._cards.get(sid)
-        if card:
-            for i in range(card.badges.count()):
-                w = card.badges.itemAt(i).widget()
-                if w and w.text().startswith(f":{port_s}"):
-                    w.set_health(color)
-                    w.setToolTip(f"{w.toolTip().split(chr(10))[0]}\n"
-                                 f"{result.label}")
+    def _probe_result(self, key, result):
+        sid, port = key.rsplit(":", 1)
+        session = self.session(sid)
+        if session:
+            self._health[(sid, int(port))] = result.label
+            self.refresh_session(session)
 
-    # -- misc -----------------------------------------------------------
-
-    def _search_terminal(self, needle: str):
-        s = self.manager.active
-        if s and s.view and needle:
-            s.view.search(needle)
-
-    def _offer_restore(self):
-        if not self.config.saved_sessions:
+    def close_session(self, session):
+        if not session or session.state == "stopping":
             return
-        ans = QMessageBox.question(
-            self, "Ports",
-            f"Restore {len(self.config.saved_sessions)} previous session(s)?"
-            "\nFresh shells are started; startup commands are not re-run "
-            "automatically.")
-        if ans != QMessageBox.StandardButton.Yes:
+        if session.state not in ("exited", "failed") and QMessageBox.question(self, "Close terminal", f"Close '{session.name}' and stop its owned processes?") != QMessageBox.StandardButton.Yes:
             return
-        for saved in self.config.saved_sessions:
-            s = self.manager.create(saved.shell, saved.cwd, saved.name,
-                                    "", saved.distro,
-                                    self.config.scrollback_lines)
-            s.restart_cmd = saved.startup_cmd  # restore restart definition
+        session.state = "stopping"
+        session.prepare_close()
+        self.refresh_session(session)
+        self.work.submit(session.close, lambda _: self._closed_session(session))
 
-    def closeEvent(self, event: QCloseEvent):
-        busy = [s for s in self.manager.sessions if s.descendant_infos()]
-        if busy:
-            names = ", ".join(s.name for s in busy[:5])
-            ans = QMessageBox.question(
-                self, "Ports",
-                f"Sessions with running processes: {names}\nQuit and kill "
-                "them?")
-            if ans != QMessageBox.StandardButton.Yes:
-                event.ignore()
-                return
-        self.config.saved_sessions = [s.to_saved()
-                                      for s in self.manager.sessions]
-        config_store.save(self.config)
-        self._probe_pool.close()
-        self.manager.shutdown()
-        event.accept()
+    def _closed_session(self, session):
+        self.stack.removeWidget(session.view)
+        session.view.deleteLater()
+        self.manager.close(session)
+
+    def settings(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Preferences")
+        layout = QFormLayout(dialog)
+        deny = QPlainTextEdit("\n".join(self.config.process_denylist))
+        allow = QPlainTextEdit("\n".join(self.config.process_allowlist))
+        deny.setMaximumHeight(100); allow.setMaximumHeight(80)
+        layout.addRow("External process denylist", deny)
+        layout.addRow("External process allowlist", allow)
+        motion = QComboBox()
+        for text, value in [("Follow Windows", "system"), ("Reduce motion", "on"), ("Enable motion", "off")]:
+            motion.addItem(text, value)
+        motion.setCurrentIndex(max(0, motion.findData(self.config.reduced_motion)))
+        layout.addRow("Motion", motion)
+        recover = QCheckBox("Back up unreadable config and enable recovery save")
+        recover.setVisible(self.config.read_only)
+        layout.addRow(recover)
+        controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        controls.accepted.connect(dialog.accept); controls.rejected.connect(dialog.reject)
+        layout.addRow(controls)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            if self.config.read_only and recover.isChecked():
+                config_store.recover(self.config)
+            self.config.process_denylist = [s.strip().lower() for s in deny.toPlainText().splitlines() if s.strip()][:256]
+            self.config.process_allowlist = [s.strip().lower() for s in allow.toPlainText().splitlines() if s.strip()][:256]
+            self.config.reduced_motion = motion.currentData()
+            self.save_config(); self._motion()
+
+    def closeEvent(self, event):
+        if self._approved_close:
+            event.accept()
+            return
+        event.ignore()
+        if self._closing:
+            return
+        if self.manager.sessions and QMessageBox.question(self, "Quit Ports", "Quit and stop all Ports-owned terminal sessions? External processes remain untouched.") != QMessageBox.StandardButton.Yes:
+            return
+        self.config.saved_sessions = [s.to_saved() for s in self.manager.sessions]
+        self.config.geometry = base64.b64encode(bytes(self.saveGeometry())).decode()
+        self.config.splitter = base64.b64encode(bytes(self.splitter.saveState())).decode()
+        self.save_config()
+        self.timer.stop()
+        self.probes.close()
+        sessions = tuple(self.manager.sessions)
+        for session in sessions:
+            session.prepare_close()
+        self.statusBar().showMessage("Stopping terminal sessions…")
+        self.setEnabled(False)
+        self._closing = True
+        # Cleanup callbacks need delivery even while ordinary callbacks ignored.
+        def cleanup():
+            for session in sessions:
+                session.close()
+            return True
+        self._cleanup_callback = self._finish_close
+        self.work.submit(cleanup, self._finish_close, self._finish_close)
+
+    def _finish_close(self, _):
+        self._approved_close = True
+        self.work.close()
+        self.close()
