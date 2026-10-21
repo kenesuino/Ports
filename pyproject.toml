@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ports"
+version = "0.1.0"
+description = "Interactive terminal manager with descendant-aware localhost port tracking"
+requires-python = ">=3.11"
+dependencies = [
+    "PyQt6==6.11.0",
+    "PyQt6-WebEngine==6.11.0",
+    "pywinpty==3.1.0",
+    "psutil==7.2.2",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.0.2"]
+
+[project.scripts]
+ports = "ports.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["ports*"]
+
+[tool.setuptools.package-data]
+ports = ["web/**/*", "shell_integration/**/*"]
