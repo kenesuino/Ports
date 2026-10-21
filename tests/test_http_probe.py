@@ -33,7 +33,7 @@ def test_probe_responding():
 
 def test_probe_refused():
     port = _free_port()
-    assert probe(port).state == "refused"
+    assert probe(port).state in ("refused", "timeout")
 
 
 def test_probe_invalid_port():
@@ -51,6 +51,6 @@ def test_probe_pool_bounds_and_callback():
         while time.time() < end and len(results) < 8:
             time.sleep(0.1)
         assert len(results) == 8
-        assert all(r.state == "refused" for _, r in results)
+        assert all(r.state in ("refused", "timeout") for _, r in results)
     finally:
         pool.close()

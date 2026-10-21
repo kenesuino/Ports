@@ -157,30 +157,45 @@ def find_any_owner(inode, skip):
     return None
 
 
-def handle_command(cmd):
+def handle_command(cmd, shell_pid=0):
+    if not isinstance(cmd, dict):
+        return {"type": "ack", "ok": False, "message": "invalid request"}
+    response = {"type": "ack", "cmd": cmd.get("cmd"), "id": cmd.get("id"), "ok": False}
     if cmd.get("cmd") == "ping":
-        return {"type": "ack", "cmd": "ping", "ok": True, "message": "pong"}
-    if cmd.get("cmd") == "signal":
-        pid = int(cmd.get("pid", 0))
-        sig = int(cmd.get("sig", signal.SIGTERM))
-        if sig not in (signal.SIGTERM, signal.SIGKILL, signal.SIGINT):
-            return {"type": "ack", "cmd": "signal", "ok": False,
-                    "message": "refused signal"}
-        try:
+        return dict(response, ok=True, message="pong")
+    if cmd.get("cmd") != "signal":
+        return dict(response, message="unknown command")
+    pid, sig, start = cmd.get("pid"), cmd.get("sig"), cmd.get("start")
+    port, address = cmd.get("port"), cmd.get("address")
+    if type(pid) is not int or pid <= 1 or pid in (shell_pid, os.getpid()):
+        return dict(response, message="protected or invalid PID")
+    if sig not in (2, 9, 15) or type(start) not in (int, float) or start <= 0:
+        return dict(response, message="identity and allowed signal required")
+    if type(port) is not int or not 1 <= port <= 65535 or not isinstance(address, str):
+        return dict(response, message="endpoint required")
+    if proc_start_time(pid) != start:
+        return dict(response, message="process identity changed")
+    sockets = parse_proc_net_tcp("/proc/net/tcp", 4)
+    sockets.update(parse_proc_net_tcp("/proc/net/tcp6", 6))
+    owned = socket_inodes_for_pid(pid)
+    if not any(inode in owned and endpoint == (address, port) for inode, endpoint in sockets.items()):
+        return dict(response, message="socket ownership changed")
+    fd = None
+    try:
+        if hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
+            fd = os.pidfd_open(pid)
+        if proc_start_time(pid) != start:
+            return dict(response, message="process identity changed")
+        if fd is not None:
+            signal.pidfd_send_signal(fd, sig)
+        else:
             os.kill(pid, sig)
-            return {"type": "ack", "cmd": "signal", "ok": True,
-                    "message": f"sent signal {sig} to {pid}"}
-        except ProcessLookupError:
-            return {"type": "ack", "cmd": "signal", "ok": False,
-                    "message": "process already exited"}
-        except PermissionError:
-            return {"type": "ack", "cmd": "signal", "ok": False,
-                    "message": "permission denied"}
-        except OSError as e:
-            return {"type": "ack", "cmd": "signal", "ok": False,
-                    "message": str(e)}
-    return {"type": "ack", "cmd": str(cmd.get("cmd")), "ok": False,
-            "message": "unknown command"}
+        return dict(response, ok=True, message=f"sent signal {sig} to {pid}")
+    except OSError as exc:
+        return dict(response, message=str(exc))
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def main():
@@ -190,6 +205,7 @@ def main():
     shell_pid = int(sys.argv[1])
     stdin_fd = sys.stdin.fileno()
     last = 0.0
+    pending = b""
     while True:
         now = time.monotonic()
         if now - last >= INTERVAL:
@@ -204,15 +220,16 @@ def main():
             line = os.read(stdin_fd, 65536)
             if not line:
                 break  # coordinator closed stdin
-            for chunk in line.decode("utf-8", "replace").splitlines():
-                chunk = chunk.strip()
-                if not chunk:
-                    continue
+            pending += line
+            if len(pending) > 65536:
+                break
+            while b"\n" in pending:
+                chunk, pending = pending.split(b"\n", 1)
                 try:
-                    cmd = json.loads(chunk)
-                except json.JSONDecodeError:
+                    cmd = json.loads(chunk.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeError):
                     continue
-                print(json.dumps(handle_command(cmd)), flush=True)
+                print(json.dumps(handle_command(cmd, shell_pid)), flush=True)
 
 
 if __name__ == "__main__":
