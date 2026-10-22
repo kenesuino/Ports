@@ -1,40 +1,45 @@
 /* Ports terminal bridge: xterm.js <-> Qt WebChannel <-> Python PtySession.
  *
- * Python -> JS: bridge.output(base64) chunks, acked via bridge.written().
+ * Python -> JS: bridge.output(base64) chunks, acked via bridge.written(bytes).
  * JS -> Python: bridge.input(base64), bridge.resized(cols, rows),
- *               bridge.openUrl(url), bridge.ready().
+ *               bridge.openUrl(url), bridge.searchResult(match, total),
+ *               bridge.scrolledUp(bool), bridge.ready().
  */
 (function () {
   "use strict";
-
-  var MAX_INFLIGHT = 1024 * 1024; // must mirror Python side
 
   function b64encode(str) {
     return btoa(unescape(encodeURIComponent(str)));
   }
   function b64decode(b64) {
     var text = atob(b64);
-    return Uint8Array.from(text, function (ch) { return ch.charCodeAt(0); });
+    var bytes = new Uint8Array(text.length);
+    for (var i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
+    return bytes;
   }
 
-    var term = new Terminal({
-    fontFamily: "'Cascadia Code', 'Cascadia Mono', Consolas, monospace",
+  var term = new Terminal({
+    fontFamily: "'Cascadia Mono', 'Cascadia Code', Consolas, monospace",
     fontSize: 13,
+    lineHeight: 1.2,
     cursorBlink: true,
+    cursorStyle: "bar",
     scrollback: 10000,
+    smoothScrollDuration: 80,
+    rightClickSelectsWord: true,
     allowProposedApi: true,
     theme: {
-      background: "#0b0e14",
-      foreground: "#d5dbe5",
-      cursor: "#7aa2f7",
-      cursorAccent: "#0b0e14",
-      selectionBackground: "#31456b",
-      black: "#1a1f2b", red: "#f7768e", green: "#9ece6a",
-      yellow: "#e0af68", blue: "#7aa2f7", magenta: "#bb9af7",
-      cyan: "#7dcfff", white: "#d5dbe5",
-      brightBlack: "#414868", brightRed: "#f7768e", brightGreen: "#9ece6a",
-      brightYellow: "#e0af68", brightBlue: "#7aa2f7",
-      brightMagenta: "#bb9af7", brightCyan: "#7dcfff", brightWhite: "#ffffff"
+      background: "#0f0f0f",
+      foreground: "#e7e7e7",
+      cursor: "#d8d8d8",
+      cursorAccent: "#0f0f0f",
+      selectionBackground: "#3b3b3b",
+      black: "#1c1c1c", red: "#ff7b8a", green: "#4fd18b",
+      yellow: "#d9a441", blue: "#a8b4c2", magenta: "#c0a8c8",
+      cyan: "#8fc7c2", white: "#e7e7e7",
+      brightBlack: "#5d5d5d", brightRed: "#ff93a0", brightGreen: "#6fdfa2",
+      brightYellow: "#e8b95c", brightBlue: "#c2ccd8", brightMagenta: "#d4c0da",
+      brightCyan: "#a5d8d2", brightWhite: "#f8f8f8"
     }
   });
 
@@ -45,8 +50,10 @@
   term.loadAddon(searchAddon);
 
   var bridge = null;
+  var totalMatches = 0;
+  var matchIndex = 0;
 
-  // URLs are validated + opened by Python, never by the web view itself.
+  // URLs are validated and opened by Python, never by the web view itself.
   var webLinks = new WebLinksAddon.WebLinksAddon(function (event, uri) {
     if (bridge) bridge.openUrl(uri);
   });
@@ -55,7 +62,6 @@
   term.open(document.getElementById("terminal"));
   fitAddon.fit();
 
-  // Write queue with ack-based backpressure toward Python.
   var queue = [];
   var writing = false;
   function pump() {
@@ -70,6 +76,14 @@
     });
   }
 
+  function reportScroll() {
+    if (!bridge) return;
+    var buffer = term.buffer.active;
+    bridge.scrolledUp(buffer.viewportY < buffer.baseY);
+  }
+
+  term.onScroll(reportScroll);
+
   function connect(channel) {
     bridge = channel.objects.bridge;
     bridge.output.connect(function (b64) {
@@ -82,13 +96,31 @@
     bridge.setScrollback.connect(function (lines) {
       term.options.scrollback = lines;
     });
+    bridge.scrollToBottom.connect(function () {
+      term.scrollToBottom();
+    });
     bridge.ready();
     term.focus();
-    requestAnimationFrame(function () { fitAddon.fit(); bridge.resized(term.cols, term.rows); });
+    requestAnimationFrame(function () {
+      fitAddon.fit();
+      bridge.resized(term.cols, term.rows);
+    });
   }
 
-  term.onData(function (data) {
+    term.onData(function (data) {
     if (bridge) bridge.input(b64encode(data));
+  });
+
+  // Copy-on-select: mirror a finished selection to the Python clipboard.
+  // xterm exposes no mouseup event, so listen on the document and check for a
+  // live selection after the drag completes.
+  function copySelection() {
+    if (!bridge || !term.hasSelection()) return;
+    var text = term.getSelection();
+    if (text) bridge.selectionCopy(text);
+  }
+  document.addEventListener("mouseup", function (event) {
+    if (event.button === 0) setTimeout(copySelection, 0);
   });
   term.onResize(function (size) {
     if (bridge) bridge.resized(size.cols, size.rows);
@@ -100,23 +132,60 @@
     resizeTimer = setTimeout(function () { fitAddon.fit(); }, 60);
   });
 
-  // Exposed for Python-invoked search.
-  window.portsSearch = function (needle, backwards) {
+  function reportMatches(value) {
+    if (!bridge) return;
+    totalMatches = (value && value.resultIndex !== undefined)
+      ? searchAddon.searchResults ? searchAddon.searchResults.length : 0
+      : 0;
+    if (!value || value.resultIndex === undefined) {
+      bridge.searchResult(0, 0);
+      return;
+    }
+    matchIndex = value.resultIndex + 1;
+    bridge.searchResult(matchIndex, totalMatches || matchIndex);
+  }
+
+  window.portsSearch = function (needle, backwards, incremental) {
+    if (!needle) {
+      searchAddon.clearDecorations();
+      if (bridge) bridge.searchResult(0, 0);
+      return false;
+    }
+    var options = { incremental: !!incremental, decorations: {} };
     return backwards
-      ? searchAddon.findPrevious(needle)
-      : searchAddon.findNext(needle);
+      ? searchAddon.findPrevious(needle, options, reportMatches)
+      : searchAddon.findNext(needle, options, reportMatches);
   };
+
+  window.portsClearSearch = function () {
+    searchAddon.clearDecorations();
+    if (bridge) bridge.searchResult(0, 0);
+  };
+
   window.portsFit = function () {
     fitAddon.fit();
     if (bridge) bridge.resized(term.cols, term.rows);
   };
+
   window.portsBufferText = function () {
     var lines = [];
     var buffer = term.buffer.active;
-    for (var i = 0; i < buffer.length; i++) lines.push(buffer.getLine(i).translateToString(true));
-    return lines.join('\n');
+    for (var i = 0; i < buffer.length; i++) {
+      lines.push(buffer.getLine(i).translateToString(true));
+    }
+    return lines.join("\n");
   };
+
   window.portsFocus = function () { term.focus(); };
+
+  window.__portsSetFontSize = function (size) {
+    var clamped = Math.max(9, Math.min(20, size | 0));
+    term.options.fontSize = clamped;
+    requestAnimationFrame(function () {
+      fitAddon.fit();
+      if (bridge) bridge.resized(term.cols, term.rows);
+    });
+  };
 
   new QWebChannel(qt.webChannelTransport, connect);
 })();

@@ -2,14 +2,31 @@
 <html>
 <head>
 <meta charset="utf-8">
-<!-- Restrictive policy: local assets only, no remote loads, no inline scripts -->
+<!-- Local assets only: no remote loads, no inline scripts. -->
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'none'; script-src 'self' qrc:; style-src 'self' 'unsafe-inline'; img-src 'none'; connect-src 'none'; font-src 'self';">
 <link rel="stylesheet" href="vendor/xterm/xterm.css">
 <style>
-  html, body { margin: 0; height: 100%; background: #0b0e14; overflow: hidden; }
-  #terminal { height: 100%; width: 100%; padding: 4px 0 0 8px; box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #0f0f0f;
+  }
+  #terminal {
+    height: 100%; width: 100%;
+    padding: 8px 10px 6px 12px;
+    box-sizing: border-box;
+  }
   .xterm { height: 100%; }
+  .xterm-viewport::-webkit-scrollbar { width: 10px; }
+  .xterm-viewport::-webkit-scrollbar-thumb {
+    background: #2a2e35; border-radius: 3px;
+  }
+  .xterm-viewport::-webkit-scrollbar-thumb:hover { background: #4a5058; }
+  .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+  /* Search decorations: subtle, neutral, never color-only. */
+  .xterm-decoration-container .xterm-decoration {
+    background: #4a5058; opacity: 0.45;
+  }
 </style>
 </head>
 <body>

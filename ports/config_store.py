@@ -6,7 +6,6 @@ from pathlib import Path
 import shutil
 import tempfile
 import time
-import uuid
 
 from .profiles import WorkspaceProfile, identifier, text, ACCENTS
 
@@ -66,10 +65,25 @@ class Config:
     saved_sessions: list = field(default_factory=list)
     profiles: list = field(default_factory=list)
     scrollback_lines: int = 10000
+    terminal_font_size: int = 13
+    copy_on_select: bool = True
+    rail_collapsed: bool = False
+    external_group_open: bool = False
+    workspace_panel_visible: bool = True
+    workspace_panel_width: int = 240
+    restore_layout: bool = True
+    probe_interval: int = 5
     geometry: str = ""
     splitter: str = ""
     view_mode: str = "sidebar"
     reduced_motion: str = "system"
+    loaded_workspace_ids: list | None = None
+    expanded_workspace_ids: list = field(default_factory=list)
+    selected_workspace_id: str = '@other'
+    left_sidebar_width: int = 260
+    ports_inspector_visible: bool = True
+    ports_inspector_width: int = 280
+    managed_ports_scope: str = 'selected'
     warning: str = ""
     last_error: str = ""
     read_only: bool = False
@@ -123,12 +137,70 @@ def load():
         if type(lines) is not int or not 100 <= lines <= 100000:
             raise ValueError("Invalid scrollback limit")
         config.scrollback_lines = lines
+        try:
+            font_size = int(data.get("terminal_font_size", 13))
+            config.terminal_font_size = max(9, min(20, font_size))
+        except (TypeError, ValueError):
+            config.terminal_font_size = 13
+        config.rail_collapsed = bool(data.get("rail_collapsed", False))
+        config.copy_on_select = bool(data.get("copy_on_select", True))
+        config.external_group_open = bool(data.get("external_group_open", False))
+        config.workspace_panel_visible = bool(
+            data.get("workspace_panel_visible", True))
+        try:
+            panel_width = int(data.get("workspace_panel_width", 240))
+        except (TypeError, ValueError):
+            panel_width = 240
+        config.workspace_panel_width = max(180, min(420, panel_width))
+        config.restore_layout = bool(data.get("restore_layout", True))
+        try:
+            probe_interval = int(data.get("probe_interval", 5))
+        except (TypeError, ValueError):
+            probe_interval = 5
+        config.probe_interval = max(2, min(60, probe_interval))
         for key in ("geometry", "splitter"):
             setattr(config, key, text(data.get(key, ""), 65536))
-        config.view_mode = data.get("view_mode", "sidebar")
+        # `view_mode` is accepted for compatibility with older configs, then
+        # discarded: tabs are the only navigation model.
+        if data.get("view_mode", "tabs") not in ("sidebar", "tabs"):
+            raise ValueError("Invalid legacy view mode")
+        config.view_mode = "tabs"
+        known = {p.id for p in config.profiles}
+        raw_loaded = data.get('loaded_workspace_ids')
+        if raw_loaded is None:
+            raw_loaded = [p.id for p in config.profiles]
+            raw_loaded += [s.workspace_profile_id for s in config.saved_sessions if s.workspace_profile_id]
+        def ids(value):
+            if not isinstance(value, list) or len(value) > 128 or any(not isinstance(v, str) for v in value):
+                raise ValueError('Invalid workspace navigation IDs')
+            return list(dict.fromkeys(value))
+        requested = ids(raw_loaded)
+        config.loaded_workspace_ids = [v for v in requested if v in known]
+        if any(v not in known for v in requested):
+            config.warning = 'Some remembered workspaces no longer exist and were removed from navigation.'
+        config.expanded_workspace_ids = [v for v in ids(data.get('expanded_workspace_ids', config.loaded_workspace_ids)) if v in known or v == '@other']
+        selected = data.get('selected_workspace_id', '@other')
+        if not isinstance(selected, str):
+            raise ValueError('Invalid selected workspace')
+        config.selected_workspace_id = selected if selected in known else '@other'
+        for key, fallback, minimum, maximum in (
+            ('left_sidebar_width', 260, 220, 420),
+            ('ports_inspector_width', config.workspace_panel_width, 220, 420)):
+            value = data.get(key, fallback)
+            if type(value) is not int:
+                raise ValueError(f'Invalid {key}')
+            setattr(config, key, max(minimum, min(maximum, value)))
+        config.ports_inspector_visible = data.get('ports_inspector_visible', config.workspace_panel_visible)
+        if type(config.ports_inspector_visible) is not bool:
+            raise ValueError('Invalid inspector visibility')
+        config.managed_ports_scope = data.get('managed_ports_scope', 'selected')
+        if config.managed_ports_scope not in ('selected', 'all'):
+            raise ValueError('Invalid ports scope')
+        config.rail_collapsed = False
+        config.restore_layout = False
         config.reduced_motion = data.get("reduced_motion", "system")
-        if config.view_mode not in ("sidebar", "tabs") or config.reduced_motion not in ("system", "on", "off"):
-            raise ValueError("Invalid navigation/motion setting")
+        if config.reduced_motion not in ("system", "on", "off"):
+            raise ValueError("Invalid motion setting")
     except (OSError, ValueError, TypeError, UnicodeError) as exc:
         config = Config(warning=f"Config retained for recovery: {exc}", read_only=True)
     return config
@@ -138,7 +210,9 @@ def save(config):
     if config.read_only:
         config.last_error = "Recovery required; original config retained"
         return False
-    data = {key: getattr(config, key) for key in ("port_labels", "process_denylist", "process_allowlist", "scrollback_lines", "view_mode", "reduced_motion", "geometry", "splitter")}
+    data = {key: getattr(config, key) for key in ("port_labels", "process_denylist", "process_allowlist", "scrollback_lines", "terminal_font_size", "copy_on_select", "rail_collapsed", "external_group_open", "workspace_panel_visible", "workspace_panel_width", "restore_layout", "probe_interval", "reduced_motion", "geometry", "splitter")}
+    data.update({key: getattr(config, key) for key in ('loaded_workspace_ids', 'expanded_workspace_ids', 'selected_workspace_id', 'left_sidebar_width', 'ports_inspector_visible', 'ports_inspector_width', 'managed_ports_scope')})
+    data['loaded_workspace_ids'] = config.loaded_workspace_ids if config.loaded_workspace_ids is not None else [p.id for p in config.profiles]
     data.update(version=SCHEMA_VERSION, saved_sessions=[s.to_dict() for s in config.saved_sessions], profiles=[p.to_dict() for p in config.profiles])
     temporary = None
     try:

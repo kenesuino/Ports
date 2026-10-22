@@ -30,12 +30,16 @@ class TerminalBridge(QObject):
     output = pyqtSignal(str)         # base64 chunk for term.write
     clearScreen = pyqtSignal()
     setScrollback = pyqtSignal(int)
+    scrollToBottom = pyqtSignal()
 
     inputReceived = pyqtSignal(str)      # decoded keystrokes -> PTY
     resizeReceived = pyqtSignal(int, int)
     urlOpenRequested = pyqtSignal(str)
     readyReceived = pyqtSignal()
     writtenReceived = pyqtSignal(int)
+    searchResultReceived = pyqtSignal(int, int)
+    scrolledUpReceived = pyqtSignal(bool)
+    selectionCopied = pyqtSignal(str)
 
     @pyqtSlot(str)
     def input(self, b64: str) -> None:
@@ -62,6 +66,17 @@ class TerminalBridge(QObject):
     def written(self, n: int) -> None:
         self.writtenReceived.emit(n)
 
+    @pyqtSlot(int, int)
+    def searchResult(self, match: int, total: int) -> None:
+        self.searchResultReceived.emit(max(0, match), max(0, total))
+
+    @pyqtSlot(bool)
+    def scrolledUp(self, value: bool) -> None:
+        self.scrolledUpReceived.emit(bool(value))
+
+    @pyqtSlot(str)
+    def selectionCopy(self, text: str) -> None:
+        self.selectionCopied.emit(text[:65536])
 
 class LockedPage(QWebEnginePage):
     """Denies all navigation except the initial local terminal.html."""
@@ -88,12 +103,16 @@ class TerminalView(QWebEngineView):
 
     inputReceived = pyqtSignal(str)
     resizeReceived = pyqtSignal(int, int)
+    searchCountChanged = pyqtSignal(int, int)
+    scrolledUpChanged = pyqtSignal(bool)
+    selectionCopied = pyqtSignal(str)
 
     def __init__(self, scrollback: int = 10000, parent=None):
         super().__init__(parent)
         url = QUrl.fromLocalFile(str(WEB_DIR / "terminal.html"))
         self._page = LockedPage(url, self)
         self.setPage(self._page)
+        self._font_size = 13
         settings = self._page.settings()
         settings.setAttribute(
             QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls,
@@ -113,6 +132,9 @@ class TerminalView(QWebEngineView):
         self.bridge.urlOpenRequested.connect(self._open_url)
         self.bridge.writtenReceived.connect(self._on_written)
         self.bridge.readyReceived.connect(self._on_ready)
+        self.bridge.searchResultReceived.connect(self.searchCountChanged)
+        self.bridge.scrolledUpReceived.connect(self.scrolledUpChanged)
+        self.bridge.selectionCopied.connect(self.selectionCopied)
 
         self._scrollback = scrollback
         self._output_buffer = OutputBuffer()
@@ -144,16 +166,34 @@ class TerminalView(QWebEngineView):
     def _on_ready(self) -> None:
         self._ready = True
         self.bridge.setScrollback.emit(self._scrollback)
+        self.set_font_size(self._font_size)
         self.refit()
+
+    def set_font_size(self, size: int) -> None:
+        self._font_size = max(9, min(20, int(size)))
+        if self._ready:
+            self._page.runJavaScript(
+                "window.__portsSetFontSize && window.__portsSetFontSize("
+                f"{self._font_size})")
 
     # -- actions -------------------------------------------------------------
 
     def clear_terminal(self) -> None:
         self.bridge.clearScreen.emit()
 
-    def search(self, needle: str, backwards: bool = False) -> None:
+    def search(self, needle: str, backwards: bool = False,
+               incremental: bool = False) -> None:
         self._page.runJavaScript(
-            f"window.portsSearch({json.dumps(needle)}, {str(backwards).lower()})")
+            "window.portsSearch && window.portsSearch("
+            f"{json.dumps(needle)}, {str(backwards).lower()}, "
+            f"{str(incremental).lower()})")
+
+    def clear_search(self) -> None:
+        self._page.runJavaScript(
+            "window.portsClearSearch && window.portsClearSearch()")
+
+    def scroll_to_bottom(self) -> None:
+        self.bridge.scrollToBottom.emit()
 
     def refit(self) -> None:
         self._page.runJavaScript("window.portsFit && window.portsFit()")

@@ -2,9 +2,16 @@
 from dataclasses import dataclass, field, asdict
 import hashlib
 import json
+import re
 import uuid
 
-ACCENTS = ("#7aa2f7", "#7dcfff", "#9ece6a", "#bb9af7", "#e0af68", "#f7768e")
+ACCENTS = ("#e7e7e7", "#b4b4b4", "#8e8e8e", "#d9a441", "#4fd18b", "#ff7b8a")
+_ACCENT_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def valid_accent(value: str) -> bool:
+    """Accept any hex accent so profiles saved with older palettes still load."""
+    return bool(_ACCENT_RE.match(value or ""))
 
 
 def identifier(value=None):
@@ -43,7 +50,7 @@ class TerminalProfile:
         result = cls(id=identifier(data.get("id")))
         for key in ("name", "shell", "cwd", "startup_cmd", "restart_cmd", "distro", "accent"):
             setattr(result, key, text(data.get(key, getattr(result, key)), 120 if key in ("name", "distro") else 4096))
-        if not result.name or result.shell not in ("pwsh", "powershell", "cmd", "wsl") or result.accent not in ACCENTS:
+        if not result.name or result.shell not in ("pwsh", "powershell", "cmd", "wsl") or not valid_accent(result.accent):
             raise ValueError("Invalid terminal name, shell, or accent")
         ports = data.get("expected_ports", [])
         if not isinstance(ports, list) or len(ports) > 64 or any(type(p) is not int or not 1 <= p <= 65535 for p in ports):

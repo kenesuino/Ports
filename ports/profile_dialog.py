@@ -1,7 +1,8 @@
 """Qt-native workspace editor; edits detached profile copies."""
 from copy import deepcopy
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QRectF, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFileDialog,
                             QFormLayout, QHBoxLayout, QLabel, QLineEdit,
                             QListWidget, QMessageBox, QPushButton, QSplitter,
@@ -10,11 +11,120 @@ from PyQt6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFileDialog,
 from .profiles import TerminalProfile, WorkspaceProfile
 from .pty_session import SHELLS, available_shells
 
-COLORS = ["#7aa2f7", "#7dcfff", "#9ece6a", "#bb9af7", "#e0af68", "#f7768e"]
+COLORS = ["#e7e7e7", "#b4b4b4", "#8e8e8e", "#d9a441", "#4fd18b", "#ff7b8a"]
+
+
+class ColorSwatch(QWidget):
+    """Circular color swatch with outer selection ring."""
+
+    clicked = pyqtSignal(str)
+
+    def __init__(self, color: str, parent=None):
+        super().__init__(parent)
+        self.color = color
+        self.selected = False
+        self._hovered = False
+        self.setFixedSize(28, 28)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAccessibleName(f"Accent color {color}")
+        self.setToolTip(color)
+
+    def enterEvent(self, event):
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.color)
+        super().mousePressEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if self.selected:
+            painter.setPen(QPen(QColor("#ffffff"), 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QRectF(2, 2, 24, 24))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(self.color))
+            painter.drawEllipse(QRectF(5, 5, 18, 18))
+        else:
+            border = QColor("#5d5d5d" if self._hovered else "#282828")
+            painter.setPen(QPen(border, 1.5 if self._hovered else 1))
+            painter.setBrush(QColor(self.color))
+            painter.drawEllipse(QRectF(4, 4, 20, 20))
+
+
+class ColorPicker(QWidget):
+    """Row of circular color clickers without raw hex strings."""
+
+    colorChanged = pyqtSignal(str)
+
+    def __init__(self, colors=COLORS, parent=None):
+        super().__init__(parent)
+        self._colors = list(colors)
+        self._selected = self._colors[0] if self._colors else ""
+        self._swatches = {}
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(8)
+        layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        for color in self._colors:
+            self._add_swatch(color, layout)
+        layout.addStretch(1)
+
+        self.setColor(self._selected)
+
+    def _add_swatch(self, color: str, layout: QHBoxLayout):
+        swatch = ColorSwatch(color, self)
+        swatch.clicked.connect(self.setColor)
+        self._swatches[color.lower()] = swatch
+        layout.addWidget(swatch)
+
+    def setColor(self, color: str):
+        if not color:
+            return
+        key = color.lower()
+        if key not in self._swatches:
+            self._colors.append(color)
+            self._add_swatch(color, self.layout())
+        self._selected = color
+        for k, swatch in self._swatches.items():
+            swatch.selected = (k == key)
+            swatch.update()
+        self.colorChanged.emit(self._selected)
+
+    def currentData(self) -> str:
+        return self._selected
+
+    def currentText(self) -> str:
+        return self._selected
+
+    def findData(self, color: str) -> int:
+        target = str(color).lower()
+        for index, c in enumerate(self._colors):
+            if c.lower() == target:
+                return index
+        return -1
+
+    def setCurrentIndex(self, index: int):
+        if 0 <= index < len(self._colors):
+            self.setColor(self._colors[index])
+
+    def currentIndex(self) -> int:
+        return self.findData(self._selected)
 
 
 class ProfileDialog(QDialog):
-    def __init__(self, profile=None, parent=None):
+    def __init__(self, profile=None, parent=None, terminal_id=None):
         super().__init__(parent)
         self.setWindowTitle("Workspace profile")
         self.resize(840, 570)
@@ -59,9 +169,7 @@ class ProfileDialog(QDialog):
         for key, spec in SHELLS.items():
             self.shell.addItem(spec["label"] + (" (unavailable)" if key not in discovered else ""), key)
         form.insertRow(1, "Shell", self.shell)
-        self.accent = QComboBox()
-        for color in COLORS:
-            self.accent.addItem(color, color)
+        self.accent = ColorPicker(COLORS)
         form.addRow("Accent", self.accent)
         note = QLabel("Commands run only through explicit Run. First run and executable edits require review. Linux folders are validated inside WSL. Avoid storing secrets in commands.")
         note.setWordWrap(True)
@@ -70,7 +178,8 @@ class ProfileDialog(QDialog):
         splitter.setSizes([220, 560])
         layout.addWidget(splitter)
         self.items.currentRowChanged.connect(self.select)
-        self.refresh(0)
+        self.refresh(next((i for i, terminal in enumerate(self.profile.terminals)
+                           if terminal.id == terminal_id), 0))
         footer = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         footer.accepted.connect(self.accept)
         footer.rejected.connect(self.reject)
@@ -106,7 +215,7 @@ class ProfileDialog(QDialog):
             value = getattr(terminal, key)
             edit.setText(", ".join(map(str, value)) if key == "expected_ports" else value)
         self.shell.setCurrentIndex(max(0, self.shell.findData(terminal.shell)))
-        self.accent.setCurrentIndex(max(0, self.accent.findData(terminal.accent)))
+        self.accent.setColor(terminal.accent)
 
     def refresh(self, index):
         self.items.blockSignals(True)

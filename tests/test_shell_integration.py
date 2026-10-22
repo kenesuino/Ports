@@ -31,5 +31,9 @@ def test_real_powershell_prompt_runs_startup_once():
         assert session.current_cwd, session.last_error
         assert b"PORTS_HOOK_SUCCESS" in bytes(session.view.buffer)
         assert not session._startup_pending
+        assert session.age.seconds() is not None
     finally:
         session.close()
+    frozen = session.age.seconds()
+    time.sleep(.05)
+    assert session.age.seconds() == frozen

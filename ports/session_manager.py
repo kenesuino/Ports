@@ -15,6 +15,7 @@ from .config_store import SavedSession
 from .pty_session import PtySession, available_shells
 from .shell_protocol import PromptParser
 from .terminal_view import TerminalView
+from .workspace_navigation import SessionAge
 from .wsl_backend import WslBackend
 
 HOOKS = Path(__file__).parent / "shell_integration"
@@ -42,8 +43,9 @@ class TerminalSession(QObject):
         self.name, self.shell, self.cwd = name, shell, cwd
         self.startup_cmd, self.restart_cmd = startup_cmd, startup_cmd
         self.distro = distro
-        self.accent = "#7aa2f7"
+        self.accent = "#e6e9ee"
         self.expected_ports = []
+        self.age = SessionAge()
         self.state = "starting"
         self.current_cwd = ""
         self.last_error = ""
@@ -114,15 +116,19 @@ class TerminalSession(QObject):
             elif self.shell == "wsl":
                 distro_args = ["-d", self.distro] if self.distro else []
                 check = subprocess.run(["wsl", *distro_args, "--", "bash", "-c",
-                                        'command -v python3 && command -v ss && test -d "$1"',
-                                        "ports", self.cwd or "/tmp"],
+                                        'command -v python3 && command -v ss && test -d ' + shlex.quote(self.cwd or '/tmp')],
                                        capture_output=True, timeout=20)
                 if check.returncode:
                     raise RuntimeError("WSL folder unavailable or python3/iproute2 missing")
                 hook = shlex.quote(linux_path(HOOKS / "bash.sh"))
+                # Normalize CRLF in-memory: Windows editors can rewrite shell
+                # assets even when repository eol attributes request LF.
+                init_path = f'/tmp/ports-hook-{self.id}.sh'
                 cd = "cd -- " + shlex.quote(self.cwd) if self.cwd else 'cd -- "$HOME"'
                 command = (f"umask 077; {cd} || exit; echo $$ > {self._pidfile}; "
-                           f"export PORTS_TOKEN={self._token}; exec bash --rcfile {hook} -i")
+                           f"export PORTS_TOKEN={self._token}; "
+                           f"tr -d '\\r' < {hook} > {init_path}; "
+                           f"exec bash --rcfile {init_path} -i")
                 pty._wsl_command = ["bash", "-c", command]
             else:
                 # A custom prompt sentinel provides initial CMD readiness.
@@ -132,6 +138,7 @@ class TerminalSession(QObject):
                 pty.launch_args = ["/Q", "/K", f"prompt {marker}$P$G"]
             self.pty = pty
             pty.start()
+            self.age.start()
             if self._closed.is_set():
                 pty.close()
                 return
@@ -234,6 +241,7 @@ class TerminalSession(QObject):
             self.pty.resize(cols, rows)
 
     def _on_exit(self):
+        self.age.stop()
         self.exited.emit()
 
     def _mark_exited(self):
@@ -305,6 +313,7 @@ class TerminalSession(QObject):
         return self.child_name
 
     def close(self):
+        self.age.stop()
         if self._closed.is_set():
             return
         self._closed.set()
@@ -370,6 +379,25 @@ class SessionManager(QObject):
             return
         self.active = session
         self.activeChanged.emit(session)
+
+    def launch_definition(self, profile, definition_id, instance_id=""):
+        """Start one definition; command review belongs to the UI caller."""
+        definition = next((d for d in profile.terminals if d.id == definition_id), None)
+        if definition is None:
+            raise ValueError("Terminal definition no longer belongs to workspace")
+        existing_instance = next((s.instance_id for s in self.sessions
+                                  if s.profile_id == profile.id), None)
+        instance = instance_id or existing_instance or uuid.uuid4().hex
+        existing = next((s for s in self.sessions if s.profile_id == profile.id
+                         and s.instance_id == instance and s.definition_id == definition_id), None)
+        if existing:
+            self.set_active(existing)
+            return existing
+        return self.create(definition.shell, definition.cwd, definition.name,
+                           definition.startup_cmd, definition.distro,
+                           profile_id=profile.id, definition_id=definition.id,
+                           instance_id=instance, restart_cmd=definition.restart_cmd or definition.startup_cmd,
+                           accent=definition.accent, expected_ports=list(definition.expected_ports))
 
     def launch_profile(self, profile, duplicate=False, missing=False):
         existing = [s for s in self.sessions if s.profile_id == profile.id]
